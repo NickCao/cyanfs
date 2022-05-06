@@ -138,27 +138,19 @@ impl SFS {
     }
 
     fn allocate_next_inode(&self) -> Inode {
-        let path = Path::new(&self.data_dir).join("superblock");
-        let current_inode = if let Ok(file) = File::open(&path) {
-            bincode::deserialize_from(file).unwrap()
+        let current_inode = if let Some(file) = self.db.get("superblock").unwrap() {
+            bincode::deserialize_from(file.as_slice()).unwrap()
         } else {
             fuser::FUSE_ROOT_ID
         };
-
-        let file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)
-            .unwrap();
-        bincode::serialize_into(file, &(current_inode + 1)).unwrap();
-
+        let mut buf = vec![];
+        bincode::serialize_into(&mut buf, &(current_inode + 1)).unwrap();
+        self.db.put("superblock", buf).unwrap();
         current_inode + 1
     }
 
     fn allocate_next_file_handle(&self, read: bool, write: bool) -> u64 {
         let mut fh = self.next_file_handle.fetch_add(1, Ordering::SeqCst);
-        // Assert that we haven't run out of file handles
         assert!(fh < FILE_HANDLE_WRITE_BIT && fh < FILE_HANDLE_READ_BIT);
         if read {
             fh |= FILE_HANDLE_READ_BIT;
@@ -166,7 +158,6 @@ impl SFS {
         if write {
             fh |= FILE_HANDLE_WRITE_BIT;
         }
-
         fh
     }
 
@@ -317,7 +308,6 @@ impl Filesystem for SFS {
         _req: &Request,
         #[allow(unused_variables)] config: &mut KernelConfig,
     ) -> Result<(), c_int> {
-        fs::create_dir_all(Path::new(&self.data_dir).join("inodes")).unwrap();
         fs::create_dir_all(Path::new(&self.data_dir).join("contents")).unwrap();
         if self.get_inode(FUSE_ROOT_ID).is_err() {
             // Initialize with empty filesystem
