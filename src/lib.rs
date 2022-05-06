@@ -21,6 +21,7 @@ use std::time::{Duration, SystemTime};
 use std::{fs, vec};
 
 pub mod block_dev;
+pub mod block_cache;
 
 const BLOCK_SIZE: u64 = 512;
 const MAX_NAME_LENGTH: u32 = 255;
