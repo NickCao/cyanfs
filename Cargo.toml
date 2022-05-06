@@ -4,4 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+libc = "0.2.125"
+serde = { version = "1", features = [ "derive" ] }
 fuser = "0.11"
+bincode = "1.3.3"
