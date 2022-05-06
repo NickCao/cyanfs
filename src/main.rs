@@ -1,3 +1,6 @@
+use fuser::mount2;
+use sfs::SFS;
+
 fn main() {
-    println!("Hello, world!");
+    mount2(SFS {}, "/tmp/sfs", &[]).unwrap();
 }
