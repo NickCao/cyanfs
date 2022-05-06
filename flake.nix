@@ -9,7 +9,7 @@
         let pkgs = import nixpkgs { inherit system; }; in
         {
           devShells.default = pkgs.mkShell {
-            nativeBuildInputs = with pkgs;[ rustc cargo rustfmt rust-analyzer pkg-config ];
+            nativeBuildInputs = with pkgs;[ rustc cargo rustfmt rust-analyzer pkg-config rustPlatform.bindgenHook ];
             buildInputs = with pkgs;[ fuse3 ];
           };
         }

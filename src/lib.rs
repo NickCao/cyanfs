@@ -106,6 +106,7 @@ impl From<InodeAttributes> for fuser::FileAttr {
 // Stores inode metadata data in "$data_dir/inodes" and file contents in "$data_dir/contents"
 // Directory data is stored in the file's contents, as a serialized DirectoryDescriptor
 pub struct SFS {
+    db: rocksdb::DB,
     data_dir: String,
     next_file_handle: AtomicU64,
     direct_io: bool,
@@ -114,11 +115,13 @@ pub struct SFS {
 
 impl SFS {
     pub fn new(
+        meta_dir: String,
         data_dir: String,
         direct_io: bool,
         #[allow(unused_variables)] suid_support: bool,
     ) -> SFS {
         SFS {
+            db: rocksdb::DB::open_default(meta_dir).unwrap(),
             data_dir,
             next_file_handle: AtomicU64::new(1),
             direct_io,
@@ -206,42 +209,28 @@ impl SFS {
     }
 
     fn get_inode(&self, inode: Inode) -> Result<InodeAttributes, c_int> {
-        let path = Path::new(&self.data_dir)
-            .join("inodes")
-            .join(inode.to_string());
-        if let Ok(file) = File::open(&path) {
-            Ok(bincode::deserialize_from(file).unwrap())
+        if let Some(file) = self.db.get(inode.to_ne_bytes()).unwrap() {
+            Ok(bincode::deserialize_from(file.as_slice()).unwrap())
         } else {
             Err(libc::ENOENT)
         }
     }
 
     fn write_inode(&self, inode: &InodeAttributes) {
-        let path = Path::new(&self.data_dir)
-            .join("inodes")
-            .join(inode.inode.to_string());
-        let file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)
-            .unwrap();
-        bincode::serialize_into(file, inode).unwrap();
+        let mut buf = vec![];
+        bincode::serialize_into(&mut buf, inode).unwrap();
+        self.db.put(inode.inode.to_ne_bytes(), buf).unwrap();
     }
 
     // Check whether a file should be removed from storage. Should be called after decrementing
     // the link count, or closing a file handle
     fn gc_inode(&self, inode: &InodeAttributes) -> bool {
         if inode.hardlinks == 0 && inode.open_file_handles == 0 {
-            let inode_path = Path::new(&self.data_dir)
-                .join("inodes")
-                .join(inode.inode.to_string());
-            fs::remove_file(inode_path).unwrap();
+            self.db.delete(inode.inode.to_ne_bytes()).unwrap();
             let content_path = Path::new(&self.data_dir)
                 .join("contents")
                 .join(inode.inode.to_string());
             fs::remove_file(content_path).unwrap();
-
             return true;
         }
 
@@ -1320,11 +1309,11 @@ impl Filesystem for SFS {
 
     fn statfs(&mut self, _req: &Request, _ino: u64, reply: ReplyStatfs) {
         reply.statfs(
-            10_000,
-            10_000,
-            10_000,
-            1,
-            10_000,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            0,
+            u64::MAX,
             BLOCK_SIZE as u32,
             MAX_NAME_LENGTH,
             BLOCK_SIZE as u32,
