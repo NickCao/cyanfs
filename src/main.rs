@@ -7,12 +7,7 @@ fn main() {
         MountOption::AutoUnmount,
     ];
     mount2(
-        SFS::new(
-            "/tmp/sfs-meta".to_string(),
-            "/tmp/sfs-data".to_string(),
-            false,
-            true,
-        ),
+        SFS::new("/tmp/sfs-meta", "/tmp/sfs-data"),
         "/tmp/sfs",
         &options,
     )
