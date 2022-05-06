@@ -9,3 +9,4 @@ serde = { version = "1", features = [ "derive" ] }
 fuser = "0.11"
 bincode = "1.3.3"
 rocksdb = "0.18.0"
+bitintr = "0.3.0"

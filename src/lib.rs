@@ -1,3 +1,4 @@
+use bitintr::*;
 use fuser::consts::FOPEN_DIRECT_IO;
 use fuser::TimeOrNow::Now;
 use fuser::{
@@ -8,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use std::cmp::min;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
-use std::fs;
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::os::raw::c_int;
@@ -18,6 +18,7 @@ use std::os::unix::io::IntoRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
+use std::{fs, vec};
 
 const BLOCK_SIZE: u64 = 512;
 const MAX_NAME_LENGTH: u32 = 255;
@@ -69,6 +70,7 @@ struct InodeAttributes {
     pub hardlinks: u32,
     pub uid: u32,
     pub gid: u32,
+    pub extents: Vec<u64>,
 }
 
 impl From<FileKind> for fuser::FileType {
@@ -134,6 +136,25 @@ impl SFS {
             (mode & !(libc::S_ISUID | libc::S_ISGID) as u32) as u16
         } else {
             mode as u16
+        }
+    }
+
+    fn allocate_next_block(&self) -> Option<u64> {
+        if let Some(bitmap) = self.db.get("bitmap").unwrap() {
+            for (i, b) in bitmap.iter().enumerate() {
+                let bb = b.blcs();
+                let bbb = b ^ bb;
+                let cnt = bbb.tzcnt();
+                if cnt != 8 {
+                    return Some(i as u64 * 8 as u64 + cnt as u64);
+                }
+            }
+            None
+        } else {
+            let mut bitmap = vec![0; 100000];
+            bitmap[0] = 1;
+            self.db.put("bitmap", bitmap).unwrap();
+            Some(0)
         }
     }
 
@@ -228,37 +249,6 @@ impl SFS {
         false
     }
 
-    fn truncate(
-        &self,
-        inode: Inode,
-        new_length: u64,
-        uid: u32,
-        gid: u32,
-    ) -> Result<InodeAttributes, c_int> {
-        if new_length > MAX_FILE_SIZE {
-            return Err(libc::EFBIG);
-        }
-
-        let mut attrs = self.get_inode(inode)?;
-
-        if !check_access(attrs.uid, attrs.gid, attrs.mode, uid, gid, libc::W_OK) {
-            return Err(libc::EACCES);
-        }
-
-        let path = self.content_path(inode);
-        let file = OpenOptions::new().write(true).open(&path).unwrap();
-        file.set_len(new_length).unwrap();
-
-        attrs.size = new_length;
-
-        // Clear SETUID & SETGID on truncate
-        clear_suid_sgid(&mut attrs);
-
-        self.write_inode(&attrs);
-
-        Ok(attrs)
-    }
-
     fn lookup_name(&self, parent: u64, name: &OsStr) -> Result<InodeAttributes, c_int> {
         let entries = self.get_directory_content(parent)?;
         if let Some((inode, _)) = entries.get(name.as_bytes()) {
@@ -320,6 +310,7 @@ impl Filesystem for SFS {
                 hardlinks: 2,
                 uid: 0,
                 gid: 0,
+                extents: vec![],
             };
             self.write_inode(&root);
             let mut entries = BTreeMap::new();
@@ -454,24 +445,7 @@ impl Filesystem for SFS {
         }
 
         if let Some(size) = size {
-            if let Some(handle) = fh {
-                // If the file handle is available, check access locally.
-                // This is important as it preserves the semantic that a file handle opened
-                // with W_OK will never fail to truncate, even if the file has been subsequently
-                // chmod'ed
-                if self.check_file_handle_write(handle) {
-                    if let Err(error_code) = self.truncate(inode, size, 0, 0) {
-                        reply.error(error_code);
-                        return;
-                    }
-                } else {
-                    reply.error(libc::EACCES);
-                    return;
-                }
-            } else if let Err(error_code) = self.truncate(inode, size, req.uid(), req.gid()) {
-                reply.error(error_code);
-                return;
-            }
+            // TODO: truncate file to size
         }
 
         if let Some(atime) = atime {
@@ -521,98 +495,6 @@ impl Filesystem for SFS {
 
         let attrs = self.get_inode(inode).unwrap();
         reply.attr(&Duration::new(0, 0), &attrs.into());
-        
-    }
-
-    fn readlink(&mut self, _req: &Request, inode: u64, reply: ReplyData) {
-        let path = self.content_path(inode);
-        if let Ok(mut file) = File::open(&path) {
-            let file_size = file.metadata().unwrap().len();
-            let mut buffer = vec![0; file_size as usize];
-            file.read_exact(&mut buffer).unwrap();
-            reply.data(&buffer);
-        } else {
-            reply.error(libc::ENOENT);
-        }
-    }
-
-    fn mknod(
-        &mut self,
-        req: &Request,
-        parent: u64,
-        name: &OsStr,
-        mut mode: u32,
-        _umask: u32,
-        _rdev: u32,
-        reply: ReplyEntry,
-    ) {
-        let file_type = mode & libc::S_IFMT as u32;
-
-        if file_type != libc::S_IFREG as u32
-            && file_type != libc::S_IFLNK as u32
-            && file_type != libc::S_IFDIR as u32
-        {
-            reply.error(libc::ENOSYS);
-            return;
-        }
-
-        if self.lookup_name(parent, name).is_ok() {
-            reply.error(libc::EEXIST);
-            return;
-        }
-
-        let parent_attrs = match self.get_inode(parent) {
-            Ok(attrs) => attrs,
-            Err(error_code) => {
-                reply.error(error_code);
-                return;
-            }
-        };
-
-        if !check_access(
-            parent_attrs.uid,
-            parent_attrs.gid,
-            parent_attrs.mode,
-            req.uid(),
-            req.gid(),
-            libc::W_OK,
-        ) {
-            reply.error(libc::EACCES);
-            return;
-        }
-        self.write_inode(&parent_attrs);
-
-        if req.uid() != 0 {
-            mode &= !(libc::S_ISUID | libc::S_ISGID) as u32;
-        }
-
-        let inode = self.allocate_next_inode();
-        let attrs = InodeAttributes {
-            inode,
-            open_file_handles: 0,
-            size: 0,
-            kind: as_file_kind(mode),
-            mode: self.creation_mode(mode),
-            hardlinks: 1,
-            uid: req.uid(),
-            gid: creation_gid(&parent_attrs, req.gid()),
-        };
-        self.write_inode(&attrs);
-        File::create(self.content_path(inode)).unwrap();
-
-        if as_file_kind(mode) == FileKind::Directory {
-            let mut entries = BTreeMap::new();
-            entries.insert(b".".to_vec(), (inode, FileKind::Directory));
-            entries.insert(b"..".to_vec(), (parent, FileKind::Directory));
-            self.write_directory_content(inode, entries);
-        }
-
-        let mut entries = self.get_directory_content(parent).unwrap();
-        entries.insert(name.as_bytes().to_vec(), (inode, attrs.kind));
-        self.write_directory_content(parent, entries);
-
-        // TODO: implement flags
-        reply.entry(&Duration::new(0, 0), &attrs.into(), 0);
     }
 
     fn mkdir(
@@ -667,6 +549,7 @@ impl Filesystem for SFS {
             hardlinks: 2, // Directories start with link count of 2, since they have a self link
             uid: req.uid(),
             gid: creation_gid(&parent_attrs, req.gid()),
+            extents: vec![],
         };
         self.write_inode(&attrs);
 
@@ -831,6 +714,7 @@ impl Filesystem for SFS {
             hardlinks: 1,
             uid: req.uid(),
             gid: creation_gid(&parent_attrs, req.gid()),
+            extents: vec![],
         };
 
         if let Err(error_code) = self.insert_link(req, parent, name, inode, FileKind::Symlink) {
@@ -1111,7 +995,6 @@ impl Filesystem for SFS {
                 } else {
                     reply.error(libc::EACCES);
                 }
-                
             }
             Err(error_code) => reply.error(error_code),
         }
@@ -1242,7 +1125,6 @@ impl Filesystem for SFS {
                 } else {
                     reply.error(libc::EACCES);
                 }
-                
             }
             Err(error_code) => reply.error(error_code),
         }
@@ -1384,6 +1266,7 @@ impl Filesystem for SFS {
             hardlinks: 1,
             uid: req.uid(),
             gid: creation_gid(&parent_attrs, req.gid()),
+            extents: vec![],
         };
         self.write_inode(&attrs);
         File::create(self.content_path(inode)).unwrap();
@@ -1409,85 +1292,6 @@ impl Filesystem for SFS {
         );
     }
 
-    #[cfg(target_os = "linux")]
-    fn fallocate(
-        &mut self,
-        _req: &Request<'_>,
-        inode: u64,
-        _fh: u64,
-        offset: i64,
-        length: i64,
-        mode: i32,
-        reply: ReplyEmpty,
-    ) {
-        let path = self.content_path(inode);
-        if let Ok(file) = OpenOptions::new().write(true).open(&path) {
-            unsafe {
-                libc::fallocate64(file.into_raw_fd(), mode, offset, length);
-            }
-            if mode & libc::FALLOC_FL_KEEP_SIZE == 0 {
-                let mut attrs = self.get_inode(inode).unwrap();
-                if (offset + length) as u64 > attrs.size {
-                    attrs.size = (offset + length) as u64;
-                }
-                self.write_inode(&attrs);
-            }
-            reply.ok();
-        } else {
-            reply.error(libc::ENOENT);
-        }
-    }
-
-    fn copy_file_range(
-        &mut self,
-        _req: &Request<'_>,
-        src_inode: u64,
-        src_fh: u64,
-        src_offset: i64,
-        dest_inode: u64,
-        dest_fh: u64,
-        dest_offset: i64,
-        size: u64,
-        _flags: u32,
-        reply: ReplyWrite,
-    ) {
-        if !self.check_file_handle_read(src_fh) {
-            reply.error(libc::EACCES);
-            return;
-        }
-        if !self.check_file_handle_write(dest_fh) {
-            reply.error(libc::EACCES);
-            return;
-        }
-
-        let src_path = self.content_path(src_inode);
-        if let Ok(file) = File::open(&src_path) {
-            let file_size = file.metadata().unwrap().len();
-            // Could underflow if file length is less than local_start
-            let read_size = min(size, file_size.saturating_sub(src_offset as u64));
-
-            let mut data = vec![0; read_size as usize];
-            file.read_exact_at(&mut data, src_offset as u64).unwrap();
-
-            let dest_path = self.content_path(dest_inode);
-            if let Ok(mut file) = OpenOptions::new().write(true).open(&dest_path) {
-                file.seek(SeekFrom::Start(dest_offset as u64)).unwrap();
-                file.write_all(&data).unwrap();
-
-                let mut attrs = self.get_inode(dest_inode).unwrap();
-                if data.len() + dest_offset as usize > attrs.size as usize {
-                    attrs.size = (data.len() + dest_offset as usize) as u64;
-                }
-                self.write_inode(&attrs);
-
-                reply.written(data.len() as u32);
-            } else {
-                reply.error(libc::EBADF);
-            }
-        } else {
-            reply.error(libc::ENOENT);
-        }
-    }
 }
 
 pub fn check_access(
