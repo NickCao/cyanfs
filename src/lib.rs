@@ -260,39 +260,6 @@ impl SFS {
             Err(libc::ENOENT)
         }
     }
-
-    fn insert_link(
-        &self,
-        req: &Request,
-        parent: u64,
-        name: &OsStr,
-        inode: u64,
-        kind: FileKind,
-    ) -> Result<(), c_int> {
-        if self.lookup_name(parent, name).is_ok() {
-            return Err(libc::EEXIST);
-        }
-
-        let parent_attrs = self.get_inode(parent)?;
-
-        if !check_access(
-            parent_attrs.uid,
-            parent_attrs.gid,
-            parent_attrs.mode,
-            req.uid(),
-            req.gid(),
-            libc::W_OK,
-        ) {
-            return Err(libc::EACCES);
-        }
-        self.write_inode(&parent_attrs);
-
-        let mut entries = self.get_directory_content(parent).unwrap();
-        entries.insert(name.as_bytes().to_vec(), (inode, kind));
-        self.write_directory_content(parent, entries);
-
-        Ok(())
-    }
 }
 
 impl Filesystem for SFS {
@@ -567,59 +534,6 @@ impl Filesystem for SFS {
         reply.entry(&Duration::new(0, 0), &attrs.into(), 0);
     }
 
-    fn unlink(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        let mut attrs = match self.lookup_name(parent, name) {
-            Ok(attrs) => attrs,
-            Err(error_code) => {
-                reply.error(error_code);
-                return;
-            }
-        };
-
-        let parent_attrs = match self.get_inode(parent) {
-            Ok(attrs) => attrs,
-            Err(error_code) => {
-                reply.error(error_code);
-                return;
-            }
-        };
-
-        if !check_access(
-            parent_attrs.uid,
-            parent_attrs.gid,
-            parent_attrs.mode,
-            req.uid(),
-            req.gid(),
-            libc::W_OK,
-        ) {
-            reply.error(libc::EACCES);
-            return;
-        }
-
-        let uid = req.uid();
-        // "Sticky bit" handling
-        if parent_attrs.mode & libc::S_ISVTX as u16 != 0
-            && uid != 0
-            && uid != parent_attrs.uid
-            && uid != attrs.uid
-        {
-            reply.error(libc::EACCES);
-            return;
-        }
-
-        self.write_inode(&parent_attrs);
-
-        attrs.hardlinks -= 1;
-        self.write_inode(&attrs);
-        self.gc_inode(&attrs);
-
-        let mut entries = self.get_directory_content(parent).unwrap();
-        entries.remove(name.as_bytes());
-        self.write_directory_content(parent, entries);
-
-        reply.ok();
-    }
-
     fn rmdir(&mut self, req: &Request, parent: u64, name: &OsStr, reply: ReplyEmpty) {
         let mut attrs = match self.lookup_name(parent, name) {
             Ok(attrs) => attrs,
@@ -675,66 +589,6 @@ impl Filesystem for SFS {
         self.write_directory_content(parent, entries);
 
         reply.ok();
-    }
-
-    fn symlink(
-        &mut self,
-        req: &Request,
-        parent: u64,
-        name: &OsStr,
-        link: &Path,
-        reply: ReplyEntry,
-    ) {
-        let parent_attrs = match self.get_inode(parent) {
-            Ok(attrs) => attrs,
-            Err(error_code) => {
-                reply.error(error_code);
-                return;
-            }
-        };
-
-        if !check_access(
-            parent_attrs.uid,
-            parent_attrs.gid,
-            parent_attrs.mode,
-            req.uid(),
-            req.gid(),
-            libc::W_OK,
-        ) {
-            reply.error(libc::EACCES);
-            return;
-        }
-        self.write_inode(&parent_attrs);
-
-        let inode = self.allocate_next_inode();
-        let attrs = InodeAttributes {
-            inode,
-            open_file_handles: 0,
-            size: link.as_os_str().as_bytes().len() as u64,
-            kind: FileKind::Symlink,
-            mode: 0o777,
-            hardlinks: 1,
-            uid: req.uid(),
-            gid: creation_gid(&parent_attrs, req.gid()),
-            extents: vec![],
-        };
-
-        if let Err(error_code) = self.insert_link(req, parent, name, inode, FileKind::Symlink) {
-            reply.error(error_code);
-            return;
-        }
-        self.write_inode(&attrs);
-
-        let path = self.content_path(inode);
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)
-            .unwrap();
-        file.write_all(link.as_os_str().as_bytes()).unwrap();
-
-        reply.entry(&Duration::new(0, 0), &attrs.into(), 0);
     }
 
     fn rename(
@@ -930,30 +784,6 @@ impl Filesystem for SFS {
         }
 
         reply.ok();
-    }
-
-    fn link(
-        &mut self,
-        req: &Request,
-        inode: u64,
-        new_parent: u64,
-        new_name: &OsStr,
-        reply: ReplyEntry,
-    ) {
-        let mut attrs = match self.get_inode(inode) {
-            Ok(attrs) => attrs,
-            Err(error_code) => {
-                reply.error(error_code);
-                return;
-            }
-        };
-        if let Err(error_code) = self.insert_link(req, new_parent, new_name, inode, attrs.kind) {
-            reply.error(error_code);
-        } else {
-            attrs.hardlinks += 1;
-            self.write_inode(&attrs);
-            reply.entry(&Duration::new(0, 0), &attrs.into(), 0);
-        }
     }
 
     fn open(&mut self, req: &Request, inode: u64, flags: i32, reply: ReplyOpen) {
