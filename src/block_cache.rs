@@ -46,7 +46,7 @@ impl<const BLOCK_SIZE: usize, const CACHE_SIZE: usize> BlockCache<BLOCK_SIZE, CA
                 block_id,
                 Block {
                     block_id,
-                    buffer: buf.clone(),
+                    buffer: *buf,
                     dev: self.dev.clone(),
                     dirty: false,
                 },
@@ -62,7 +62,7 @@ impl<const BLOCK_SIZE: usize, const CACHE_SIZE: usize> BlockCache<BLOCK_SIZE, CA
                 block_id,
                 Block {
                     block_id,
-                    buffer: buf.clone(),
+                    buffer: *buf,
                     dev: self.dev.clone(),
                     dirty: true,
                 },

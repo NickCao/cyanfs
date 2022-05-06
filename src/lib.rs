@@ -10,11 +10,11 @@ use std::cmp::min;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{Seek, SeekFrom, Write};
 use std::os::raw::c_int;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::FileExt;
-use std::os::unix::io::IntoRawFd;
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
@@ -149,7 +149,7 @@ impl SFS {
                 let bbb = b ^ bb;
                 let cnt = bbb.tzcnt();
                 if cnt != 8 {
-                    return Some(i as u64 * 8 as u64 + cnt as u64);
+                    return Some(i as u64 * 8_u64 + cnt as u64);
                 }
             }
             None
@@ -367,7 +367,7 @@ impl Filesystem for SFS {
         atime: Option<TimeOrNow>,
         mtime: Option<TimeOrNow>,
         _ctime: Option<SystemTime>,
-        fh: Option<u64>,
+        _fh: Option<u64>,
         _crtime: Option<SystemTime>,
         _chgtime: Option<SystemTime>,
         _bkuptime: Option<SystemTime>,
@@ -389,7 +389,6 @@ impl Filesystem for SFS {
             }
             if req.uid() != 0
                 && req.gid() != attrs.gid
-                && !get_groups(req.pid()).contains(&attrs.gid)
             {
                 // If SGID is set and the file belongs to a group that the caller is not part of
                 // then the SGID bit is suppose to be cleared during chmod
@@ -403,9 +402,9 @@ impl Filesystem for SFS {
         }
 
         if uid.is_some() || gid.is_some() {
-            if let Some(gid) = gid {
+            if let Some(_gid) = gid {
                 // Non-root users can only change gid to a group they're in
-                if req.uid() != 0 && !get_groups(req.pid()).contains(&gid) {
+                if req.uid() != 0 {
                     reply.error(libc::EPERM);
                     return;
                 }
@@ -447,7 +446,7 @@ impl Filesystem for SFS {
             return;
         }
 
-        if let Some(size) = size {
+        if let Some(_size) = size {
             // TODO: truncate file to size
         }
 
@@ -1346,22 +1345,3 @@ fn as_file_kind(mut mode: u32) -> FileKind {
     }
 }
 
-fn get_groups(pid: u32) -> Vec<u32> {
-    #[cfg(not(target_os = "macos"))]
-    {
-        let path = format!("/proc/{}/task/{}/status", pid, pid);
-        let file = File::open(path).unwrap();
-        for line in BufReader::new(file).lines() {
-            let line = line.unwrap();
-            if line.starts_with("Groups:") {
-                return line["Groups: ".len()..]
-                    .split(' ')
-                    .filter(|x| !x.trim().is_empty())
-                    .map(|x| x.parse::<u32>().unwrap())
-                    .collect();
-            }
-        }
-    }
-
-    vec![]
-}
