@@ -43,60 +43,6 @@ enum FileKind {
     Symlink,
 }
 
-impl From<FileKind> for fuser::FileType {
-    fn from(kind: FileKind) -> Self {
-        match kind {
-            FileKind::File => fuser::FileType::RegularFile,
-            FileKind::Directory => fuser::FileType::Directory,
-            FileKind::Symlink => fuser::FileType::Symlink,
-        }
-    }
-}
-
-#[derive(Debug)]
-enum XattrNamespace {
-    Security,
-    System,
-    Trusted,
-    User,
-}
-
-fn parse_xattr_namespace(key: &[u8]) -> Result<XattrNamespace, c_int> {
-    let user = b"user.";
-    if key.len() < user.len() {
-        return Err(libc::ENOTSUP);
-    }
-    if key[..user.len()].eq(user) {
-        return Ok(XattrNamespace::User);
-    }
-
-    let system = b"system.";
-    if key.len() < system.len() {
-        return Err(libc::ENOTSUP);
-    }
-    if key[..system.len()].eq(system) {
-        return Ok(XattrNamespace::System);
-    }
-
-    let trusted = b"trusted.";
-    if key.len() < trusted.len() {
-        return Err(libc::ENOTSUP);
-    }
-    if key[..trusted.len()].eq(trusted) {
-        return Ok(XattrNamespace::Trusted);
-    }
-
-    let security = b"security";
-    if key.len() < security.len() {
-        return Err(libc::ENOTSUP);
-    }
-    if key[..security.len()].eq(security) {
-        return Ok(XattrNamespace::Security);
-    }
-
-    return Err(libc::ENOTSUP);
-}
-
 fn clear_suid_sgid(attr: &mut InodeAttributes) {
     attr.mode &= !libc::S_ISUID as u16;
     // SGID is only suppose to be cleared if XGRP is set
@@ -111,56 +57,6 @@ fn creation_gid(parent: &InodeAttributes, gid: u32) -> u32 {
     }
 
     gid
-}
-
-fn xattr_access_check(
-    key: &[u8],
-    access_mask: i32,
-    inode_attrs: &InodeAttributes,
-    request: &Request<'_>,
-) -> Result<(), c_int> {
-    match parse_xattr_namespace(key)? {
-        XattrNamespace::Security => {
-            if access_mask != libc::R_OK && request.uid() != 0 {
-                return Err(libc::EPERM);
-            }
-        }
-        XattrNamespace::Trusted => {
-            if request.uid() != 0 {
-                return Err(libc::EPERM);
-            }
-        }
-        XattrNamespace::System => {
-            if key.eq(b"system.posix_acl_access") {
-                if !check_access(
-                    inode_attrs.uid,
-                    inode_attrs.gid,
-                    inode_attrs.mode,
-                    request.uid(),
-                    request.gid(),
-                    access_mask,
-                ) {
-                    return Err(libc::EPERM);
-                }
-            } else if request.uid() != 0 {
-                return Err(libc::EPERM);
-            }
-        }
-        XattrNamespace::User => {
-            if !check_access(
-                inode_attrs.uid,
-                inode_attrs.gid,
-                inode_attrs.mode,
-                request.uid(),
-                request.gid(),
-                access_mask,
-            ) {
-                return Err(libc::EPERM);
-            }
-        }
-    }
-
-    Ok(())
 }
 
 fn time_now() -> (i64, u32) {
@@ -200,7 +96,17 @@ struct InodeAttributes {
     pub hardlinks: u32,
     pub uid: u32,
     pub gid: u32,
-    pub xattrs: BTreeMap<Vec<u8>, Vec<u8>>,
+
+}
+
+impl From<FileKind> for fuser::FileType {
+    fn from(kind: FileKind) -> Self {
+        match kind {
+            FileKind::File => fuser::FileType::RegularFile,
+            FileKind::Directory => fuser::FileType::Directory,
+            FileKind::Symlink => fuser::FileType::Symlink,
+        }
+    }
 }
 
 impl From<InodeAttributes> for fuser::FileAttr {
@@ -476,7 +382,6 @@ impl Filesystem for SFS {
                 hardlinks: 2,
                 uid: 0,
                 gid: 0,
-                xattrs: Default::default(),
             };
             self.write_inode(&root);
             let mut entries = BTreeMap::new();
@@ -771,7 +676,6 @@ impl Filesystem for SFS {
             hardlinks: 1,
             uid: req.uid(),
             gid: creation_gid(&parent_attrs, req.gid()),
-            xattrs: Default::default(),
         };
         self.write_inode(&attrs);
         File::create(self.content_path(inode)).unwrap();
@@ -848,7 +752,6 @@ impl Filesystem for SFS {
             hardlinks: 2, // Directories start with link count of 2, since they have a self link
             uid: req.uid(),
             gid: creation_gid(&parent_attrs, req.gid()),
-            xattrs: Default::default(),
         };
         self.write_inode(&attrs);
 
@@ -1024,7 +927,6 @@ impl Filesystem for SFS {
             hardlinks: 1,
             uid: req.uid(),
             gid: creation_gid(&parent_attrs, req.gid()),
-            xattrs: Default::default(),
         };
 
         if let Err(error_code) = self.insert_link(req, parent, name, inode, FileKind::Symlink) {
@@ -1519,106 +1421,6 @@ impl Filesystem for SFS {
         );
     }
 
-    fn setxattr(
-        &mut self,
-        request: &Request<'_>,
-        inode: u64,
-        key: &OsStr,
-        value: &[u8],
-        _flags: i32,
-        _position: u32,
-        reply: ReplyEmpty,
-    ) {
-        if let Ok(mut attrs) = self.get_inode(inode) {
-            if let Err(error) = xattr_access_check(key.as_bytes(), libc::W_OK, &attrs, request) {
-                reply.error(error);
-                return;
-            }
-
-            attrs.xattrs.insert(key.as_bytes().to_vec(), value.to_vec());
-            attrs.last_metadata_changed = time_now();
-            self.write_inode(&attrs);
-            reply.ok();
-        } else {
-            reply.error(libc::EBADF);
-        }
-    }
-
-    fn getxattr(
-        &mut self,
-        request: &Request<'_>,
-        inode: u64,
-        key: &OsStr,
-        size: u32,
-        reply: ReplyXattr,
-    ) {
-        if let Ok(attrs) = self.get_inode(inode) {
-            if let Err(error) = xattr_access_check(key.as_bytes(), libc::R_OK, &attrs, request) {
-                reply.error(error);
-                return;
-            }
-
-            if let Some(data) = attrs.xattrs.get(key.as_bytes()) {
-                if size == 0 {
-                    reply.size(data.len() as u32);
-                } else if data.len() <= size as usize {
-                    reply.data(data);
-                } else {
-                    reply.error(libc::ERANGE);
-                }
-            } else {
-                #[cfg(target_os = "linux")]
-                reply.error(libc::ENODATA);
-                #[cfg(not(target_os = "linux"))]
-                reply.error(libc::ENOATTR);
-            }
-        } else {
-            reply.error(libc::EBADF);
-        }
-    }
-
-    fn listxattr(&mut self, _req: &Request<'_>, inode: u64, size: u32, reply: ReplyXattr) {
-        if let Ok(attrs) = self.get_inode(inode) {
-            let mut bytes = vec![];
-            // Convert to concatenated null-terminated strings
-            for key in attrs.xattrs.keys() {
-                bytes.extend(key);
-                bytes.push(0);
-            }
-            if size == 0 {
-                reply.size(bytes.len() as u32);
-            } else if bytes.len() <= size as usize {
-                reply.data(&bytes);
-            } else {
-                reply.error(libc::ERANGE);
-            }
-        } else {
-            reply.error(libc::EBADF);
-        }
-    }
-
-    fn removexattr(&mut self, request: &Request<'_>, inode: u64, key: &OsStr, reply: ReplyEmpty) {
-        if let Ok(mut attrs) = self.get_inode(inode) {
-            if let Err(error) = xattr_access_check(key.as_bytes(), libc::W_OK, &attrs, request) {
-                reply.error(error);
-                return;
-            }
-
-            if attrs.xattrs.remove(key.as_bytes()).is_none() {
-                #[cfg(target_os = "linux")]
-                reply.error(libc::ENODATA);
-                #[cfg(not(target_os = "linux"))]
-                reply.error(libc::ENOATTR);
-                return;
-            }
-            attrs.last_metadata_changed = time_now();
-            self.write_inode(&attrs);
-            reply.ok();
-        } else {
-            reply.error(libc::EBADF);
-        }
-    }
-
     fn access(&mut self, req: &Request, inode: u64, mask: i32, reply: ReplyEmpty) {
         match self.get_inode(inode) {
             Ok(attr) => {
@@ -1698,7 +1500,6 @@ impl Filesystem for SFS {
             hardlinks: 1,
             uid: req.uid(),
             gid: creation_gid(&parent_attrs, req.gid()),
-            xattrs: Default::default(),
         };
         self.write_inode(&attrs);
         File::create(self.content_path(inode)).unwrap();
