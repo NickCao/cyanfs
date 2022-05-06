@@ -58,7 +58,6 @@ impl<const BLOCK_SIZE: usize, const CACHE_SIZE: usize> BlockCache<BLOCK_SIZE, CA
         if let Some(block) = self.cache.get_mut(&block_id) {
             block.buffer.as_mut_slice().write_all(buf)
         } else {
-            self.dev.write_block(block_id, buf)?;
             self.cache.put(
                 block_id,
                 Block {
