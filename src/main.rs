@@ -8,7 +8,7 @@ fn main() {
     ];
     mount2(
         SFS::new("/tmp/sfs-data".to_string(), false, true),
-        "/tmp/sfs".to_string(),
+        "/tmp/sfs",
         &options,
     )
     .unwrap();

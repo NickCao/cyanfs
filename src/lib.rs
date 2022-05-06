@@ -17,7 +17,7 @@ use std::os::unix::fs::FileExt;
 use std::os::unix::io::IntoRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime};
 
 const BLOCK_SIZE: u64 = 512;
 const MAX_NAME_LENGTH: u32 = 255;
@@ -58,37 +58,11 @@ fn creation_gid(parent: &InodeAttributes, gid: u32) -> u32 {
     gid
 }
 
-fn time_now() -> (i64, u32) {
-    time_from_system_time(&SystemTime::now())
-}
-
-fn system_time_from_time(secs: i64, nsecs: u32) -> SystemTime {
-    if secs >= 0 {
-        UNIX_EPOCH + Duration::new(secs as u64, nsecs)
-    } else {
-        UNIX_EPOCH - Duration::new((-secs) as u64, nsecs)
-    }
-}
-
-fn time_from_system_time(system_time: &SystemTime) -> (i64, u32) {
-    // Convert to signed 64-bit time with epoch at 0
-    match system_time.duration_since(UNIX_EPOCH) {
-        Ok(duration) => (duration.as_secs() as i64, duration.subsec_nanos()),
-        Err(before_epoch_error) => (
-            -(before_epoch_error.duration().as_secs() as i64),
-            before_epoch_error.duration().subsec_nanos(),
-        ),
-    }
-}
-
 #[derive(Serialize, Deserialize)]
 struct InodeAttributes {
     pub inode: Inode,
     pub open_file_handles: u64, // Ref count of open file handles to this inode
     pub size: u64,
-    pub last_accessed: (i64, u32),
-    pub last_modified: (i64, u32),
-    pub last_metadata_changed: (i64, u32),
     pub kind: FileKind,
     // Permissions and special mode bits
     pub mode: u16,
@@ -113,13 +87,10 @@ impl From<InodeAttributes> for fuser::FileAttr {
             ino: attrs.inode,
             size: attrs.size,
             blocks: (attrs.size + BLOCK_SIZE - 1) / BLOCK_SIZE,
-            atime: system_time_from_time(attrs.last_accessed.0, attrs.last_accessed.1),
-            mtime: system_time_from_time(attrs.last_modified.0, attrs.last_modified.1),
-            ctime: system_time_from_time(
-                attrs.last_metadata_changed.0,
-                attrs.last_metadata_changed.1,
-            ),
             crtime: SystemTime::UNIX_EPOCH,
+            atime: SystemTime::UNIX_EPOCH,
+            mtime: SystemTime::UNIX_EPOCH,
+            ctime: SystemTime::UNIX_EPOCH,
             kind: attrs.kind.into(),
             perm: attrs.mode,
             nlink: attrs.hardlinks,
@@ -274,7 +245,7 @@ impl SFS {
             return true;
         }
 
-        return false;
+        false
     }
 
     fn truncate(
@@ -299,8 +270,6 @@ impl SFS {
         file.set_len(new_length).unwrap();
 
         attrs.size = new_length;
-        attrs.last_metadata_changed = time_now();
-        attrs.last_modified = time_now();
 
         // Clear SETUID & SETGID on truncate
         clear_suid_sgid(&mut attrs);
@@ -313,9 +282,9 @@ impl SFS {
     fn lookup_name(&self, parent: u64, name: &OsStr) -> Result<InodeAttributes, c_int> {
         let entries = self.get_directory_content(parent)?;
         if let Some((inode, _)) = entries.get(name.as_bytes()) {
-            return self.get_inode(*inode);
+            self.get_inode(*inode)
         } else {
-            return Err(libc::ENOENT);
+            Err(libc::ENOENT)
         }
     }
 
@@ -331,7 +300,7 @@ impl SFS {
             return Err(libc::EEXIST);
         }
 
-        let mut parent_attrs = self.get_inode(parent)?;
+        let parent_attrs = self.get_inode(parent)?;
 
         if !check_access(
             parent_attrs.uid,
@@ -343,8 +312,6 @@ impl SFS {
         ) {
             return Err(libc::EACCES);
         }
-        parent_attrs.last_modified = time_now();
-        parent_attrs.last_metadata_changed = time_now();
         self.write_inode(&parent_attrs);
 
         let mut entries = self.get_directory_content(parent).unwrap();
@@ -369,9 +336,6 @@ impl Filesystem for SFS {
                 inode: FUSE_ROOT_ID,
                 open_file_handles: 0,
                 size: 0,
-                last_accessed: time_now(),
-                last_modified: time_now(),
-                last_metadata_changed: time_now(),
                 kind: FileKind::Directory,
                 mode: 0o777,
                 hardlinks: 2,
@@ -460,7 +424,6 @@ impl Filesystem for SFS {
             } else {
                 attrs.mode = mode as u16;
             }
-            attrs.last_metadata_changed = time_now();
             self.write_inode(&attrs);
             reply.attr(&Duration::new(0, 0), &attrs.into());
             return;
@@ -506,7 +469,6 @@ impl Filesystem for SFS {
                     attrs.mode &= !libc::S_ISGID as u16;
                 }
             }
-            attrs.last_metadata_changed = time_now();
             self.write_inode(&attrs);
             reply.attr(&Duration::new(0, 0), &attrs.into());
             return;
@@ -533,7 +495,6 @@ impl Filesystem for SFS {
             }
         }
 
-        let now = time_now();
         if let Some(atime) = atime {
             if attrs.uid != req.uid() && req.uid() != 0 && atime != Now {
                 reply.error(libc::EPERM);
@@ -554,11 +515,6 @@ impl Filesystem for SFS {
                 return;
             }
 
-            attrs.last_accessed = match atime {
-                TimeOrNow::SpecificTime(time) => time_from_system_time(&time),
-                Now => now,
-            };
-            attrs.last_metadata_changed = now;
             self.write_inode(&attrs);
         }
         if let Some(mtime) = mtime {
@@ -581,17 +537,12 @@ impl Filesystem for SFS {
                 return;
             }
 
-            attrs.last_modified = match mtime {
-                TimeOrNow::SpecificTime(time) => time_from_system_time(&time),
-                Now => now,
-            };
-            attrs.last_metadata_changed = now;
             self.write_inode(&attrs);
         }
 
         let attrs = self.get_inode(inode).unwrap();
         reply.attr(&Duration::new(0, 0), &attrs.into());
-        return;
+        
     }
 
     fn readlink(&mut self, _req: &Request, inode: u64, reply: ReplyData) {
@@ -631,7 +582,7 @@ impl Filesystem for SFS {
             return;
         }
 
-        let mut parent_attrs = match self.get_inode(parent) {
+        let parent_attrs = match self.get_inode(parent) {
             Ok(attrs) => attrs,
             Err(error_code) => {
                 reply.error(error_code);
@@ -650,8 +601,6 @@ impl Filesystem for SFS {
             reply.error(libc::EACCES);
             return;
         }
-        parent_attrs.last_modified = time_now();
-        parent_attrs.last_metadata_changed = time_now();
         self.write_inode(&parent_attrs);
 
         if req.uid() != 0 {
@@ -663,9 +612,6 @@ impl Filesystem for SFS {
             inode,
             open_file_handles: 0,
             size: 0,
-            last_accessed: time_now(),
-            last_modified: time_now(),
-            last_metadata_changed: time_now(),
             kind: as_file_kind(mode),
             mode: self.creation_mode(mode),
             hardlinks: 1,
@@ -704,7 +650,7 @@ impl Filesystem for SFS {
             return;
         }
 
-        let mut parent_attrs = match self.get_inode(parent) {
+        let parent_attrs = match self.get_inode(parent) {
             Ok(attrs) => attrs,
             Err(error_code) => {
                 reply.error(error_code);
@@ -723,8 +669,6 @@ impl Filesystem for SFS {
             reply.error(libc::EACCES);
             return;
         }
-        parent_attrs.last_modified = time_now();
-        parent_attrs.last_metadata_changed = time_now();
         self.write_inode(&parent_attrs);
 
         if req.uid() != 0 {
@@ -739,9 +683,6 @@ impl Filesystem for SFS {
             inode,
             open_file_handles: 0,
             size: BLOCK_SIZE,
-            last_accessed: time_now(),
-            last_modified: time_now(),
-            last_metadata_changed: time_now(),
             kind: FileKind::Directory,
             mode: self.creation_mode(mode),
             hardlinks: 2, // Directories start with link count of 2, since they have a self link
@@ -771,7 +712,7 @@ impl Filesystem for SFS {
             }
         };
 
-        let mut parent_attrs = match self.get_inode(parent) {
+        let parent_attrs = match self.get_inode(parent) {
             Ok(attrs) => attrs,
             Err(error_code) => {
                 reply.error(error_code);
@@ -802,12 +743,9 @@ impl Filesystem for SFS {
             return;
         }
 
-        parent_attrs.last_metadata_changed = time_now();
-        parent_attrs.last_modified = time_now();
         self.write_inode(&parent_attrs);
 
         attrs.hardlinks -= 1;
-        attrs.last_metadata_changed = time_now();
         self.write_inode(&attrs);
         self.gc_inode(&attrs);
 
@@ -827,7 +765,7 @@ impl Filesystem for SFS {
             }
         };
 
-        let mut parent_attrs = match self.get_inode(parent) {
+        let parent_attrs = match self.get_inode(parent) {
             Ok(attrs) => attrs,
             Err(error_code) => {
                 reply.error(error_code);
@@ -862,12 +800,9 @@ impl Filesystem for SFS {
             return;
         }
 
-        parent_attrs.last_metadata_changed = time_now();
-        parent_attrs.last_modified = time_now();
         self.write_inode(&parent_attrs);
 
         attrs.hardlinks = 0;
-        attrs.last_metadata_changed = time_now();
         self.write_inode(&attrs);
         self.gc_inode(&attrs);
 
@@ -886,7 +821,7 @@ impl Filesystem for SFS {
         link: &Path,
         reply: ReplyEntry,
     ) {
-        let mut parent_attrs = match self.get_inode(parent) {
+        let parent_attrs = match self.get_inode(parent) {
             Ok(attrs) => attrs,
             Err(error_code) => {
                 reply.error(error_code);
@@ -905,8 +840,6 @@ impl Filesystem for SFS {
             reply.error(libc::EACCES);
             return;
         }
-        parent_attrs.last_modified = time_now();
-        parent_attrs.last_metadata_changed = time_now();
         self.write_inode(&parent_attrs);
 
         let inode = self.allocate_next_inode();
@@ -914,9 +847,6 @@ impl Filesystem for SFS {
             inode,
             open_file_handles: 0,
             size: link.as_os_str().as_bytes().len() as u64,
-            last_accessed: time_now(),
-            last_modified: time_now(),
-            last_metadata_changed: time_now(),
             kind: FileKind::Symlink,
             mode: 0o777,
             hardlinks: 1,
@@ -952,7 +882,7 @@ impl Filesystem for SFS {
         flags: u32,
         reply: ReplyEmpty,
     ) {
-        let mut inode_attrs = match self.lookup_name(parent, name) {
+        let inode_attrs = match self.lookup_name(parent, name) {
             Ok(attrs) => attrs,
             Err(error_code) => {
                 reply.error(error_code);
@@ -960,7 +890,7 @@ impl Filesystem for SFS {
             }
         };
 
-        let mut parent_attrs = match self.get_inode(parent) {
+        let parent_attrs = match self.get_inode(parent) {
             Ok(attrs) => attrs,
             Err(error_code) => {
                 reply.error(error_code);
@@ -990,7 +920,7 @@ impl Filesystem for SFS {
             return;
         }
 
-        let mut new_parent_attrs = match self.get_inode(new_parent) {
+        let new_parent_attrs = match self.get_inode(new_parent) {
             Ok(attrs) => attrs,
             Err(error_code) => {
                 reply.error(error_code);
@@ -1025,7 +955,7 @@ impl Filesystem for SFS {
 
         #[cfg(target_os = "linux")]
         if flags & libc::RENAME_EXCHANGE as u32 != 0 {
-            let mut new_inode_attrs = match self.lookup_name(new_parent, new_name) {
+            let new_inode_attrs = match self.lookup_name(new_parent, new_name) {
                 Ok(attrs) => attrs,
                 Err(error_code) => {
                     reply.error(error_code);
@@ -1047,15 +977,9 @@ impl Filesystem for SFS {
             );
             self.write_directory_content(parent, entries);
 
-            parent_attrs.last_metadata_changed = time_now();
-            parent_attrs.last_modified = time_now();
             self.write_inode(&parent_attrs);
-            new_parent_attrs.last_metadata_changed = time_now();
-            new_parent_attrs.last_modified = time_now();
             self.write_inode(&new_parent_attrs);
-            inode_attrs.last_metadata_changed = time_now();
             self.write_inode(&inode_attrs);
-            new_inode_attrs.last_metadata_changed = time_now();
             self.write_inode(&new_inode_attrs);
 
             if inode_attrs.kind == FileKind::Directory {
@@ -1115,7 +1039,6 @@ impl Filesystem for SFS {
             } else {
                 existing_inode_attrs.hardlinks -= 1;
             }
-            existing_inode_attrs.last_metadata_changed = time_now();
             self.write_inode(&existing_inode_attrs);
             self.gc_inode(&existing_inode_attrs);
         }
@@ -1131,13 +1054,8 @@ impl Filesystem for SFS {
         );
         self.write_directory_content(new_parent, entries);
 
-        parent_attrs.last_metadata_changed = time_now();
-        parent_attrs.last_modified = time_now();
         self.write_inode(&parent_attrs);
-        new_parent_attrs.last_metadata_changed = time_now();
-        new_parent_attrs.last_modified = time_now();
         self.write_inode(&new_parent_attrs);
-        inode_attrs.last_metadata_changed = time_now();
         self.write_inode(&inode_attrs);
 
         if inode_attrs.kind == FileKind::Directory {
@@ -1168,7 +1086,6 @@ impl Filesystem for SFS {
             reply.error(error_code);
         } else {
             attrs.hardlinks += 1;
-            attrs.last_metadata_changed = time_now();
             self.write_inode(&attrs);
             reply.entry(&Duration::new(0, 0), &attrs.into(), 0);
         }
@@ -1215,7 +1132,7 @@ impl Filesystem for SFS {
                 } else {
                     reply.error(libc::EACCES);
                 }
-                return;
+                
             }
             Err(error_code) => reply.error(error_code),
         }
@@ -1276,8 +1193,6 @@ impl Filesystem for SFS {
             file.write_all(data).unwrap();
 
             let mut attrs = self.get_inode(inode).unwrap();
-            attrs.last_metadata_changed = time_now();
-            attrs.last_modified = time_now();
             if data.len() + offset as usize > attrs.size as usize {
                 attrs.size = (data.len() + offset as usize) as u64;
             }
@@ -1348,7 +1263,7 @@ impl Filesystem for SFS {
                 } else {
                     reply.error(libc::EACCES);
                 }
-                return;
+                
             }
             Err(error_code) => reply.error(error_code),
         }
@@ -1455,7 +1370,7 @@ impl Filesystem for SFS {
             }
         };
 
-        let mut parent_attrs = match self.get_inode(parent) {
+        let parent_attrs = match self.get_inode(parent) {
             Ok(attrs) => attrs,
             Err(error_code) => {
                 reply.error(error_code);
@@ -1474,8 +1389,6 @@ impl Filesystem for SFS {
             reply.error(libc::EACCES);
             return;
         }
-        parent_attrs.last_modified = time_now();
-        parent_attrs.last_metadata_changed = time_now();
         self.write_inode(&parent_attrs);
 
         if req.uid() != 0 {
@@ -1487,9 +1400,6 @@ impl Filesystem for SFS {
             inode,
             open_file_handles: 1,
             size: 0,
-            last_accessed: time_now(),
-            last_modified: time_now(),
-            last_metadata_changed: time_now(),
             kind: as_file_kind(mode),
             mode: self.creation_mode(mode),
             hardlinks: 1,
@@ -1538,8 +1448,6 @@ impl Filesystem for SFS {
             }
             if mode & libc::FALLOC_FL_KEEP_SIZE == 0 {
                 let mut attrs = self.get_inode(inode).unwrap();
-                attrs.last_metadata_changed = time_now();
-                attrs.last_modified = time_now();
                 if (offset + length) as u64 > attrs.size {
                     attrs.size = (offset + length) as u64;
                 }
@@ -1588,8 +1496,6 @@ impl Filesystem for SFS {
                 file.write_all(&data).unwrap();
 
                 let mut attrs = self.get_inode(dest_inode).unwrap();
-                attrs.last_metadata_changed = time_now();
-                attrs.last_modified = time_now();
                 if data.len() + dest_offset as usize > attrs.size as usize {
                     attrs.size = (data.len() + dest_offset as usize) as u64;
                 }
@@ -1637,18 +1543,18 @@ pub fn check_access(
         access_mask -= access_mask & file_mode;
     }
 
-    return access_mask == 0;
+    access_mask == 0
 }
 
 fn as_file_kind(mut mode: u32) -> FileKind {
     mode &= libc::S_IFMT as u32;
 
     if mode == libc::S_IFREG as u32 {
-        return FileKind::File;
+        FileKind::File
     } else if mode == libc::S_IFLNK as u32 {
-        return FileKind::Symlink;
+        FileKind::Symlink
     } else if mode == libc::S_IFDIR as u32 {
-        return FileKind::Directory;
+        FileKind::Directory
     } else {
         unimplemented!("{}", mode);
     }
