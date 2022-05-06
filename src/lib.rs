@@ -69,6 +69,7 @@ struct InodeAttributes {
     pub hardlinks: u32,
     pub uid: u32,
     pub gid: u32,
+    pub dirent: Vec<u8>,
 }
 
 impl From<FileKind> for fuser::FileType {
@@ -176,27 +177,19 @@ impl SFS {
     }
 
     fn get_directory_content(&self, inode: Inode) -> Result<DirectoryDescriptor, c_int> {
-        let path = Path::new(&self.data_dir)
-            .join("contents")
-            .join(inode.to_string());
-        if let Ok(file) = File::open(&path) {
-            Ok(bincode::deserialize_from(file).unwrap())
+        if let Ok(file) = self.get_inode(inode) {
+            Ok(bincode::deserialize_from(file.dirent.as_slice()).unwrap())
         } else {
             Err(libc::ENOENT)
         }
     }
 
     fn write_directory_content(&self, inode: Inode, entries: DirectoryDescriptor) {
-        let path = Path::new(&self.data_dir)
-            .join("contents")
-            .join(inode.to_string());
-        let file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&path)
-            .unwrap();
-        bincode::serialize_into(file, &entries).unwrap();
+        let mut buf = vec![];
+        let mut i = self.get_inode(inode).unwrap();
+        bincode::serialize_into(&mut buf, &entries).unwrap();
+        i.dirent = buf;
+        self.write_inode(&i);
     }
 
     fn get_inode(&self, inode: Inode) -> Result<InodeAttributes, c_int> {
@@ -320,6 +313,7 @@ impl Filesystem for SFS {
                 hardlinks: 2,
                 uid: 0,
                 gid: 0,
+                dirent: vec![]
             };
             self.write_inode(&root);
             let mut entries = BTreeMap::new();
@@ -596,6 +590,7 @@ impl Filesystem for SFS {
             hardlinks: 1,
             uid: req.uid(),
             gid: creation_gid(&parent_attrs, req.gid()),
+            dirent: vec![],
         };
         self.write_inode(&attrs);
         File::create(self.content_path(inode)).unwrap();
@@ -667,6 +662,7 @@ impl Filesystem for SFS {
             hardlinks: 2, // Directories start with link count of 2, since they have a self link
             uid: req.uid(),
             gid: creation_gid(&parent_attrs, req.gid()),
+            dirent: vec![],
         };
         self.write_inode(&attrs);
 
@@ -831,6 +827,7 @@ impl Filesystem for SFS {
             hardlinks: 1,
             uid: req.uid(),
             gid: creation_gid(&parent_attrs, req.gid()),
+            dirent: vec![],
         };
 
         if let Err(error_code) = self.insert_link(req, parent, name, inode, FileKind::Symlink) {
@@ -1384,6 +1381,7 @@ impl Filesystem for SFS {
             hardlinks: 1,
             uid: req.uid(),
             gid: creation_gid(&parent_attrs, req.gid()),
+            dirent: vec![],
         };
         self.write_inode(&attrs);
         File::create(self.content_path(inode)).unwrap();
