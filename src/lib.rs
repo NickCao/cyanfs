@@ -2,12 +2,14 @@ use fuser::{
     Filesystem, KernelConfig, ReplyAttr, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyStatfs,
     Request, FUSE_ROOT_ID,
 };
+use rocksdb::DB;
 use serde::{Deserialize, Serialize};
 
 use std::ffi::OsStr;
 
 use std::os::raw::c_int;
 
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use std::vec;
 
@@ -23,8 +25,24 @@ pub enum FileKind {
     Symlink,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
 pub struct Inode {
+    pub inner: InodeInner,
+    pub db: Arc<DB>,
+}
+
+impl Drop for Inode {
+    fn drop(&mut self) {
+        self.db
+            .put(
+                self.inner.ino.to_ne_bytes(),
+                &bincode::serialize(&self.inner).unwrap(),
+            )
+            .unwrap();
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct InodeInner {
     pub ino: u64,
     pub size: u64,
     pub kind: FileKind,
@@ -50,17 +68,17 @@ impl From<FileKind> for fuser::FileType {
 }
 
 impl From<Inode> for fuser::FileAttr {
-    fn from(inner: Inode) -> Self {
+    fn from(inode: Inode) -> Self {
         fuser::FileAttr {
-            ino: inner.ino,
-            size: inner.size,
-            blocks: inner.blocks.len() as u64,
+            ino: inode.inner.ino,
+            size: inode.inner.size,
+            blocks: inode.inner.blocks.len() as u64,
             crtime: SystemTime::UNIX_EPOCH,
             atime: SystemTime::UNIX_EPOCH,
             mtime: SystemTime::UNIX_EPOCH,
             ctime: SystemTime::UNIX_EPOCH,
-            kind: inner.kind.into(),
-            perm: inner.perm,
+            kind: inode.inner.kind.into(),
+            perm: inode.inner.perm,
             nlink: 1,
             uid: 0,
             gid: 0,
@@ -72,7 +90,7 @@ impl From<Inode> for fuser::FileAttr {
 }
 
 pub struct SFS {
-    db: rocksdb::DB,
+    db: Arc<DB>,
     dev: block_cache::BlockCache<BLOCK_SIZE, 20>,
     next_inode: usize,
     next_block: usize,
@@ -81,15 +99,18 @@ pub struct SFS {
 impl SFS {
     pub fn new(meta: &str, data: &str) -> Self {
         Self {
-            db: rocksdb::DB::open_default(meta).unwrap(),
+            db: Arc::new(rocksdb::DB::open_default(meta).unwrap()),
             dev: block_cache::BlockCache::new(data).unwrap(),
-            next_inode: 0,
+            next_inode: FUSE_ROOT_ID as usize,
             next_block: 0,
         }
     }
     pub fn read_inode(&self, ino: u64) -> Option<Inode> {
         if let Some(value) = self.db.get(ino.to_ne_bytes()).unwrap() {
-            Some(bincode::deserialize(&value).unwrap())
+            Some(Inode {
+                inner: bincode::deserialize(&value).unwrap(),
+                db: self.db.clone(),
+            })
         } else {
             None
         }
@@ -104,12 +125,19 @@ impl SFS {
         self.next_inode += 1;
         inode
     }
-    pub fn write_inode(&self, inode: &Inode) {
-        self.db
-            .put(inode.ino.to_ne_bytes(), bincode::serialize(inode).unwrap())
-            .unwrap();
+    pub fn new_inode(&mut self) -> Inode {
+        Inode {
+            inner: InodeInner {
+                ino: self.alloc_inode() as u64,
+                size: 0,
+                kind: FileKind::File,
+                perm: 0o777,
+                blocks: vec![],
+            },
+            db: self.db.clone(),
+        }
     }
-    pub fn replace_data(&mut self, inode: &Inode, data: &[u8]) {
+    pub fn replace_data(&mut self, inode: &mut Inode, data: &[u8]) {
         let mut new_blocks = vec![];
         let chunks = data.chunks(BLOCK_SIZE);
         for chunk in chunks {
@@ -119,19 +147,17 @@ impl SFS {
             self.dev.write_block(block, &buf).unwrap();
             new_blocks.push(block);
         }
-        let mut new_inode = (*inode).clone();
-        new_inode.size = data.len() as u64;
-        new_inode.blocks = new_blocks;
-        self.write_inode(&new_inode);
+        inode.inner.size = data.len() as u64;
+        inode.inner.blocks = new_blocks;
     }
     pub fn read_data(&mut self, inode: &Inode) -> Vec<u8> {
         let mut data = vec![];
-        for block in &inode.blocks {
+        for block in &inode.inner.blocks {
             let mut buf = [0u8; BLOCK_SIZE];
             self.dev.read_block(*block, &mut buf).unwrap();
             data.extend_from_slice(&buf);
         }
-        data.truncate(inode.size as usize);
+        data.truncate(inode.inner.size as usize);
         data
     }
 }
@@ -140,20 +166,14 @@ impl Filesystem for SFS {
     fn init(&mut self, _req: &Request, _config: &mut KernelConfig) -> Result<(), c_int> {
         println!("init");
         if self.read_inode(FUSE_ROOT_ID).is_none() {
-            self.write_inode(&Inode {
-                ino: FUSE_ROOT_ID,
-                blocks: vec![],
-                kind: FileKind::Directory,
-                perm: 0o777,
-                size: 0,
-            });
-            let root = self.read_inode(FUSE_ROOT_ID).unwrap();
+            let mut root = self.new_inode();
+            root.inner.kind = FileKind::Directory;
             let empty: Vec<DirEntry> = vec![];
-            self.replace_data(&root, &bincode::serialize(&empty).unwrap())
+            self.replace_data(&mut root, &bincode::serialize(&empty).unwrap())
         }
         let it = self.db.iterator(rocksdb::IteratorMode::Start);
         for (k, v) in it {
-            let inode: Inode = bincode::deserialize(&v).unwrap();
+            let inode: InodeInner = bincode::deserialize(&v).unwrap();
             let ino = inode.ino as usize;
             if ino >= self.next_inode {
                 self.next_inode = ino + 1;
@@ -262,28 +282,21 @@ impl Filesystem for SFS {
         reply: ReplyEntry,
     ) {
         println!("mknod");
-        if let Some(parent) = self.read_inode(parent) {
-            if parent.kind != FileKind::Directory {
+        if let Some(mut parent) = self.read_inode(parent) {
+            if parent.inner.kind != FileKind::Directory {
                 reply.error(libc::EACCES);
                 return;
             }
             let mut entries: Vec<DirEntry> =
                 bincode::deserialize(&self.read_data(&parent)).unwrap();
-            let new_inode = Inode {
-                ino: self.alloc_inode() as u64,
-                kind: FileKind::File,
-                perm: mode as u16,
-                blocks: vec![],
-                size: 0,
-            };
-            self.write_inode(&new_inode);
+            let new_inode = self.new_inode();
             let entry = DirEntry {
-                ino: new_inode.ino,
+                ino: new_inode.inner.ino,
                 name: name.to_string_lossy().to_string(),
                 kind: FileKind::File,
             };
             entries.push(entry);
-            self.replace_data(&parent, &bincode::serialize(&entries).unwrap());
+            self.replace_data(&mut parent, &bincode::serialize(&entries).unwrap());
             reply.entry(&Duration::new(0, 0), &new_inode.into(), 0);
         } else {
             reply.error(libc::EACCES);
@@ -318,30 +331,24 @@ impl Filesystem for SFS {
         reply: ReplyEntry,
     ) {
         println!("mkdir");
-        if let Some(parent) = self.read_inode(parent) {
-            if parent.kind != FileKind::Directory {
+        if let Some(mut parent) = self.read_inode(parent) {
+            if parent.inner.kind != FileKind::Directory {
                 reply.error(libc::EACCES);
                 return;
             }
             let mut entries: Vec<DirEntry> =
                 bincode::deserialize(&self.read_data(&parent)).unwrap();
-            let new_inode = Inode {
-                ino: self.alloc_inode() as u64,
-                kind: FileKind::Directory,
-                perm: mode as u16,
-                blocks: vec![],
-                size: 0,
-            };
+            let mut new_inode = self.new_inode();
+            new_inode.inner.kind = FileKind::Directory;
             let empty: Vec<DirEntry> = vec![];
-            self.write_inode(&new_inode);
-            self.replace_data(&new_inode, &bincode::serialize(&empty).unwrap());
+            self.replace_data(&mut new_inode, &bincode::serialize(&empty).unwrap());
             let entry = DirEntry {
-                ino: new_inode.ino,
+                ino: new_inode.inner.ino,
                 name: name.to_string_lossy().to_string(),
                 kind: FileKind::Directory,
             };
             entries.push(entry);
-            self.replace_data(&parent, &bincode::serialize(&entries).unwrap());
+            self.replace_data(&mut parent, &bincode::serialize(&entries).unwrap());
             reply.entry(&Duration::new(0, 0), &new_inode.into(), 0);
         } else {
             reply.error(libc::EACCES);
