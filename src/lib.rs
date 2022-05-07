@@ -230,6 +230,27 @@ impl Filesystem for SFS {
         }
     }
 
+    fn setattr(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        mode: Option<u32>,
+        uid: Option<u32>,
+        gid: Option<u32>,
+        size: Option<u64>,
+        _atime: Option<fuser::TimeOrNow>,
+        _mtime: Option<fuser::TimeOrNow>,
+        _ctime: Option<SystemTime>,
+        fh: Option<u64>,
+        _crtime: Option<SystemTime>,
+        _chgtime: Option<SystemTime>,
+        _bkuptime: Option<SystemTime>,
+        flags: Option<u32>,
+        reply: ReplyAttr,
+    ) {
+        println!("setattr");
+        reply.attr(&Duration::new(0, 0), &self.read_inode(ino).unwrap().into());
+    }
     fn mknod(
         &mut self,
         _req: &Request<'_>,
@@ -241,6 +262,32 @@ impl Filesystem for SFS {
         reply: ReplyEntry,
     ) {
         println!("mknod");
+        if let Some(parent) = self.read_inode(parent) {
+            if parent.kind != FileKind::Directory {
+                reply.error(libc::EACCES);
+                return;
+            }
+            let mut entries: Vec<DirEntry> =
+                bincode::deserialize(&self.read_data(&parent)).unwrap();
+            let new_inode = Inode {
+                ino: self.alloc_inode() as u64,
+                kind: FileKind::File,
+                perm: mode as u16,
+                blocks: vec![],
+                size: 0,
+            };
+            self.write_inode(&new_inode);
+            let entry = DirEntry {
+                ino: new_inode.ino,
+                name: name.to_string_lossy().to_string(),
+                kind: FileKind::File,
+            };
+            entries.push(entry);
+            self.replace_data(&parent, &bincode::serialize(&entries).unwrap());
+            reply.entry(&Duration::new(0, 0), &new_inode.into(), 0);
+        } else {
+            reply.error(libc::EACCES);
+        };
     }
     fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
         print!("lookup");
@@ -286,6 +333,7 @@ impl Filesystem for SFS {
                 size: 0,
             };
             let empty: Vec<DirEntry> = vec![];
+            self.write_inode(&new_inode);
             self.replace_data(&new_inode, &bincode::serialize(&empty).unwrap());
             let entry = DirEntry {
                 ino: new_inode.ino,
