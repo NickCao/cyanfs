@@ -28,4 +28,7 @@ impl<const BLOCK_SIZE: usize> BlockDevice<BLOCK_SIZE> {
         self.backing_file
             .write_all_at(buf, (block_id * BLOCK_SIZE) as u64)
     }
+    pub fn size(&self) -> Result<usize> {
+        Ok(self.backing_file.metadata()?.len() as usize / BLOCK_SIZE)
+    }
 }

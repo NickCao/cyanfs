@@ -70,4 +70,7 @@ impl<const BLOCK_SIZE: usize, const CACHE_SIZE: usize> BlockCache<BLOCK_SIZE, CA
             Ok(())
         }
     }
+    pub fn size(&self) -> Result<usize> {
+        self.dev.size()
+    }
 }
