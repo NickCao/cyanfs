@@ -96,7 +96,6 @@ pub struct InodeInner {
     pub kind: FileKind,
     pub perm: u16,
     pub nlinks: u64,
-    pub xattrs: HashMap<String, Vec<u8>>,
     pub entries: HashMap<String, DirEntry>,
     pub link: std::path::PathBuf,
     pub blocks: Vec<usize>,
@@ -183,7 +182,6 @@ impl SFS {
                 nlinks: 1,
                 link: std::path::PathBuf::new(),
                 entries: HashMap::new(),
-                xattrs: HashMap::new(),
                 blocks: vec![],
             },
             db: self.db.clone(),
@@ -602,7 +600,7 @@ impl Filesystem for SFS {
     }
     fn readlink(&mut self, _req: &Request<'_>, ino: u64, reply: fuser::ReplyData) {
         if let Some(inode) = self.read_inode(ino) {
-            reply.data(&inode.inner.link.as_os_str().as_bytes());
+            reply.data(inode.inner.link.as_os_str().as_bytes());
         } else {
             reply.error(libc::ENOENT);
         }
@@ -628,78 +626,5 @@ impl Filesystem for SFS {
         reply: fuser::ReplyDirectoryPlus,
     ) {
         reply.error(libc::ENOSYS);
-    }
-    fn setxattr(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        name: &OsStr,
-        value: &[u8],
-        _flags: i32,
-        _position: u32,
-        reply: ReplyEmpty,
-    ) {
-        if let Some(mut inode) = self.read_inode(ino) {
-            inode
-                .inner
-                .xattrs
-                .insert(name.to_str().unwrap().to_string(), value.to_vec());
-            reply.ok();
-        } else {
-            reply.error(libc::EBADF);
-        }
-    }
-    fn getxattr(
-        &mut self,
-        _req: &Request<'_>,
-        ino: u64,
-        name: &OsStr,
-        size: u32,
-        reply: fuser::ReplyXattr,
-    ) {
-        if let Some(inode) = self.read_inode(ino) {
-            if let Some(data) = inode.inner.xattrs.get(name.to_str().unwrap()) {
-                if size == 0 {
-                    reply.size(data.len() as u32);
-                } else if data.len() <= size as usize {
-                    reply.data(data);
-                } else {
-                    reply.error(libc::ERANGE);
-                }
-            } else {
-                reply.error(libc::ENODATA);
-            }
-        } else {
-            reply.error(libc::EBADF);
-        }
-    }
-    fn listxattr(&mut self, _req: &Request<'_>, ino: u64, size: u32, reply: fuser::ReplyXattr) {
-        if let Some(inode) = self.read_inode(ino) {
-            let mut bytes = vec![];
-            for key in inode.inner.xattrs.keys() {
-                bytes.extend(OsStr::new(key).as_bytes());
-                bytes.push(0);
-            }
-            if size == 0 {
-                reply.size(bytes.len() as u32);
-            } else if bytes.len() <= size as usize {
-                reply.data(&bytes);
-            } else {
-                reply.error(libc::ERANGE);
-            }
-        } else {
-            reply.error(libc::EBADF);
-        }
-    }
-    fn removexattr(&mut self, _req: &Request<'_>, ino: u64, name: &OsStr, reply: ReplyEmpty) {
-        if let Some(mut inode) = self.read_inode(ino) {
-            if inode.inner.xattrs.remove(name.to_str().unwrap()).is_some() {
-                reply.ok();
-            } else {
-                reply.error(libc::ENODATA);
-            }
-        } else {
-            reply.error(libc::EBADF);
-        }
     }
 }
