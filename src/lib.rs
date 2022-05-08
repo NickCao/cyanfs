@@ -1,10 +1,10 @@
-use block_cache::BlockCache;
+
 use fuser::{
     Filesystem, KernelConfig, ReplyAttr, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyStatfs,
     Request, FUSE_ROOT_ID,
 };
 use rocksdb::DB;
-use serde::{Deserialize, Serialize};
+
 
 use std::collections::HashMap;
 use std::ffi::OsStr;
@@ -16,147 +16,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use std::vec;
 
-pub mod block_cache;
+
 pub mod block_dev;
+pub mod block_cache;
+pub mod inode;
+use crate::inode::*;
 
 const BLOCK_SIZE: usize = 512;
 const CACHE_SIZE: usize = 512;
-
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
-pub enum FileKind {
-    File,
-    Directory,
-    Symlink,
-}
-
-pub struct Inode {
-    pub inner: InodeInner,
-    pub db: Arc<DB>,
-    pub dev: Arc<Mutex<BlockCache<BLOCK_SIZE, CACHE_SIZE>>>,
-}
-
-impl Inode {
-    pub fn lookup(
-        db: Arc<DB>,
-        dev: Arc<Mutex<BlockCache<BLOCK_SIZE, CACHE_SIZE>>>,
-        ino: u64,
-    ) -> Result<Self, c_int> {
-        if let Some(inner) = db.get(ino.to_le_bytes()).map_err(|_| libc::EIO)? {
-            Ok(Inode {
-                inner: bincode::deserialize(&inner).map_err(|_| libc::EBADF)?,
-                db,
-                dev,
-            })
-        } else {
-            Err(libc::ENOENT)
-        }
-    }
-}
-
-impl Drop for Inode {
-    fn drop(&mut self) {
-        self.db
-            .put(
-                self.inner.ino.to_le_bytes(),
-                &bincode::serialize(&self.inner).unwrap(),
-            )
-            .unwrap();
-    }
-}
-
-impl FileExt for Inode {
-    fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
-        let mut data = vec![];
-        for block in &self.inner.blocks {
-            let mut buf = [0u8; BLOCK_SIZE];
-            self.dev
-                .lock()
-                .unwrap()
-                .read_block(*block, &mut buf)
-                .unwrap();
-            data.extend_from_slice(&buf);
-        }
-        let size = std::cmp::min((self.inner.size - offset) as usize, buf.len()) as usize;
-        buf[..size].copy_from_slice(&data[offset as usize..offset as usize + size]);
-        Ok(size)
-    }
-    fn write_at(&self, buf: &[u8], offset: u64) -> std::io::Result<usize> {
-        let mut data = vec![];
-        for block in &self.inner.blocks {
-            let mut buf = [0u8; BLOCK_SIZE];
-            self.dev
-                .lock()
-                .unwrap()
-                .read_block(*block, &mut buf)
-                .unwrap();
-            data.extend_from_slice(&buf);
-        }
-        data[offset as usize..offset as usize + buf.len()].copy_from_slice(buf);
-        for (i, block) in self.inner.blocks.iter().enumerate() {
-            self.dev
-                .lock()
-                .unwrap()
-                .write_block(
-                    *block,
-                    data[i * BLOCK_SIZE..(i + 1) * BLOCK_SIZE]
-                        .try_into()
-                        .unwrap(),
-                )
-                .unwrap();
-        }
-        Ok(buf.len())
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct InodeInner {
-    pub ino: u64,
-    pub size: u64,
-    pub kind: FileKind,
-    pub perm: u16,
-    pub nlinks: u64,
-    pub entries: HashMap<String, DirEntry>,
-    pub link: std::path::PathBuf,
-    pub blocks: Vec<usize>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct DirEntry {
-    pub ino: u64,
-    pub kind: FileKind,
-}
-
-impl From<FileKind> for fuser::FileType {
-    fn from(kind: FileKind) -> Self {
-        match kind {
-            FileKind::File => fuser::FileType::RegularFile,
-            FileKind::Directory => fuser::FileType::Directory,
-            FileKind::Symlink => fuser::FileType::Symlink,
-        }
-    }
-}
-
-impl From<Inode> for fuser::FileAttr {
-    fn from(inode: Inode) -> Self {
-        fuser::FileAttr {
-            ino: inode.inner.ino,
-            size: inode.inner.size,
-            blocks: inode.inner.blocks.len() as u64,
-            crtime: SystemTime::UNIX_EPOCH,
-            atime: SystemTime::UNIX_EPOCH,
-            mtime: SystemTime::UNIX_EPOCH,
-            ctime: SystemTime::UNIX_EPOCH,
-            kind: inode.inner.kind.into(),
-            perm: inode.inner.perm,
-            nlink: 1,
-            uid: 0,
-            gid: 0,
-            rdev: 0,
-            blksize: BLOCK_SIZE as u32,
-            flags: 0,
-        }
-    }
-}
 
 pub struct SFS {
     db: Arc<DB>,
