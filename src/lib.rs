@@ -98,6 +98,7 @@ pub struct InodeInner {
     pub nlinks: u64,
     pub xattrs: HashMap<String, Vec<u8>>,
     pub entries: HashMap<String, DirEntry>,
+    pub link: std::path::PathBuf,
     pub blocks: Vec<usize>,
 }
 
@@ -180,6 +181,7 @@ impl SFS {
                 kind: FileKind::File,
                 perm: 0o777,
                 nlinks: 1,
+                link: std::path::PathBuf::new(),
                 entries: HashMap::new(),
                 xattrs: HashMap::new(),
                 blocks: vec![],
@@ -416,12 +418,13 @@ impl Filesystem for SFS {
         _req: &Request<'_>,
         parent: u64,
         name: &OsStr,
-        _mode: u32,
+        mode: u32,
         _umask: u32,
         _rdev: u32,
         reply: ReplyEntry,
     ) {
         println!("mknod");
+        let file_type = mode & libc::S_IFMT as u32;
         if let Some(mut parent) = self.read_inode(parent) {
             if parent.inner.kind != FileKind::Directory {
                 reply.error(libc::EACCES);
@@ -436,7 +439,15 @@ impl Filesystem for SFS {
                 name.to_str().unwrap().to_string(),
                 DirEntry {
                     ino: new_inode.inner.ino,
-                    kind: FileKind::File,
+                    kind: match file_type {
+                        libc::S_IFREG => FileKind::File,
+                        libc::S_IFLNK => FileKind::Symlink,
+                        libc::S_IFDIR => FileKind::Directory,
+                        _ => {
+                            reply.error(libc::ENOSYS);
+                            return;
+                        }
+                    },
                 },
             );
             reply.entry(&Duration::new(0, 0), &new_inode.into(), 0);
@@ -534,15 +545,20 @@ impl Filesystem for SFS {
     ) {
         reply.error(libc::ENOSYS);
     }
-    fn fsync(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, datasync: bool, reply: ReplyEmpty) {
+    fn fsync(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        _fh: u64,
+        _datasync: bool,
+        reply: ReplyEmpty,
+    ) {
         if let Some(inode) = self.read_inode(ino) {
-            if datasync {
-                inode
-                    .inner
-                    .blocks
-                    .iter()
-                    .for_each(|&block| self.dev.lock().unwrap().flush_block(block));
-            }
+            inode
+                .inner
+                .blocks
+                .iter()
+                .for_each(|&block| self.dev.lock().unwrap().flush_block(block));
             reply.ok();
         } else {
             reply.error(libc::EBADF);
@@ -586,12 +602,36 @@ impl Filesystem for SFS {
     fn symlink(
         &mut self,
         _req: &Request<'_>,
-        _parent: u64,
-        _name: &OsStr,
-        _link: &std::path::Path,
+        parent: u64,
+        name: &OsStr,
+        link: &std::path::Path,
         reply: ReplyEntry,
     ) {
-        reply.error(libc::ENOSYS);
+        println!("symlink");
+        if let Some(mut parent) = self.read_inode(parent) {
+            if parent.inner.kind != FileKind::Directory {
+                reply.error(libc::EACCES);
+                return;
+            }
+            let mut new_inode = self.new_inode();
+            new_inode.inner.kind = FileKind::Symlink;
+            new_inode.inner.link = link.to_path_buf();
+            if parent.inner.entries.contains_key(name.to_str().unwrap()) {
+                reply.error(libc::EEXIST);
+                return;
+            }
+            parent.inner.entries.insert(
+                name.to_str().unwrap().to_string(),
+                DirEntry {
+                    ino: new_inode.inner.ino,
+                    kind: FileKind::Symlink,
+                },
+            );
+            reply.entry(&Duration::new(0, 0), &new_inode.into(), 0);
+            println!("success");
+        } else {
+            reply.error(libc::EBADF);
+        };
     }
     fn release(
         &mut self,
@@ -601,18 +641,16 @@ impl Filesystem for SFS {
         _flags: i32,
         _lock_owner: Option<u64>,
         _flush: bool,
-        _reply: ReplyEmpty,
+        reply: ReplyEmpty,
     ) {
+        reply.error(libc::ENOSYS);
     }
-    fn readlink(&mut self, _req: &Request<'_>, _ino: u64, _reply: fuser::ReplyData) {}
-    fn fsyncdir(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        _fh: u64,
-        _datasync: bool,
-        _reply: ReplyEmpty,
-    ) {
+    fn readlink(&mut self, _req: &Request<'_>, ino: u64, reply: fuser::ReplyData) {
+        if let Some(inode) = self.read_inode(ino) {
+            reply.data(&inode.inner.link.as_os_str().as_bytes());
+        } else {
+            reply.error(libc::ENOENT);
+        }
     }
     fn setxattr(
         &mut self,
