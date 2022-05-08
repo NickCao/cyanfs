@@ -11,7 +11,7 @@ use std::ffi::OsStr;
 
 use std::os::raw::c_int;
 
-use std::os::unix::prelude::FileExt;
+use std::os::unix::prelude::{FileExt, OsStrExt};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use std::vec;
@@ -650,24 +650,65 @@ impl Filesystem for SFS {
     fn setxattr(
         &mut self,
         _req: &Request<'_>,
-        _ino: u64,
-        _name: &OsStr,
-        _value: &[u8],
+        ino: u64,
+        name: &OsStr,
+        value: &[u8],
         _flags: i32,
         _position: u32,
-        _reply: ReplyEmpty,
+        reply: ReplyEmpty,
     ) {
+        if let Some(mut inode) = self.read_inode(ino) {
+            inode
+                .inner
+                .xattrs
+                .insert(name.to_str().unwrap().to_string(), value.to_vec());
+            reply.ok();
+        } else {
+            reply.error(libc::EBADF);
+        }
     }
     fn getxattr(
         &mut self,
         _req: &Request<'_>,
-        _ino: u64,
-        _name: &OsStr,
-        _size: u32,
-        _reply: fuser::ReplyXattr,
+        ino: u64,
+        name: &OsStr,
+        size: u32,
+        reply: fuser::ReplyXattr,
     ) {
+        if let Some(inode) = self.read_inode(ino) {
+            if let Some(data) = inode.inner.xattrs.get(name.to_str().unwrap()) {
+                if size == 0 {
+                    reply.size(data.len() as u32);
+                } else if data.len() <= size as usize {
+                    reply.data(data);
+                } else {
+                    reply.error(libc::ERANGE);
+                }
+            } else {
+                reply.error(libc::ENODATA);
+            }
+        } else {
+            reply.error(libc::EBADF);
+        }
     }
-    fn listxattr(&mut self, _req: &Request<'_>, _ino: u64, _size: u32, _reply: fuser::ReplyXattr) {}
+    fn listxattr(&mut self, _req: &Request<'_>, ino: u64, size: u32, reply: fuser::ReplyXattr) {
+        if let Some(inode) = self.read_inode(ino) {
+            let mut bytes = vec![];
+            for key in inode.inner.xattrs.keys() {
+                bytes.extend(OsStr::new(key).as_bytes());
+                bytes.push(0);
+            }
+            if size == 0 {
+                reply.size(bytes.len() as u32);
+            } else if bytes.len() <= size as usize {
+                reply.data(&bytes);
+            } else {
+                reply.error(libc::ERANGE);
+            }
+        } else {
+            reply.error(libc::EBADF);
+        }
+    }
     fn fallocate(
         &mut self,
         _req: &Request<'_>,
@@ -702,10 +743,10 @@ impl Filesystem for SFS {
             if inode.inner.xattrs.remove(name.to_str().unwrap()).is_some() {
                 reply.ok();
             } else {
-                reply.error(libc::ENOENT);
+                reply.error(libc::ENODATA);
             }
         } else {
-            reply.error(libc::ENOENT);
+            reply.error(libc::EBADF);
         }
     }
     fn copy_file_range(
