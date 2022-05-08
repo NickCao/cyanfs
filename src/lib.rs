@@ -394,21 +394,31 @@ impl Filesystem for SFS {
         _req: &Request<'_>,
         ino: u64,
         mode: Option<u32>,
-        uid: Option<u32>,
-        gid: Option<u32>,
+        _uid: Option<u32>,
+        _gid: Option<u32>,
         size: Option<u64>,
         _atime: Option<fuser::TimeOrNow>,
         _mtime: Option<fuser::TimeOrNow>,
         _ctime: Option<SystemTime>,
-        fh: Option<u64>,
+        _fh: Option<u64>,
         _crtime: Option<SystemTime>,
         _chgtime: Option<SystemTime>,
         _bkuptime: Option<SystemTime>,
-        flags: Option<u32>,
+        _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
         println!("setattr");
-        reply.attr(&Duration::new(0, 0), &self.read_inode(ino).unwrap().into());
+        if let Some(mut inode) = self.read_inode(ino) {
+            if let Some(size) = size {
+                inode.inner.size = size;
+            }
+            if let Some(mode) = mode {
+                inode.inner.perm = mode as u16;
+            }
+            reply.attr(&Duration::new(0, 0), &inode.into());
+        } else {
+            reply.error(libc::ENOENT);
+        }
     }
     fn mknod(
         &mut self,
@@ -461,7 +471,6 @@ impl Filesystem for SFS {
             reply.error(libc::ENOENT);
         }
     }
-
     fn mkdir(
         &mut self,
         _req: &Request<'_>,
