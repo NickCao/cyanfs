@@ -464,19 +464,33 @@ impl Filesystem for SFS {
         _flags: u32,
         reply: ReplyEmpty,
     ) {
-        let inode = self.lookup_dirent(parent, name).unwrap();
-        if let Ok(mut newparent) = self.read_inode(newparent) {
-            newparent.attrs.entries.insert(
+        if parent == newparent {
+            let ent = self.lookup_dirent(parent, name).unwrap();
+            self.remove_dirent(parent, name);
+            let mut parent = self.read_inode(parent).unwrap();
+            parent.attrs.entries.insert(
                 newname.to_str().unwrap().to_string(),
                 DirEntry {
-                    ino: inode.attrs.ino,
-                    kind: inode.attrs.kind,
+                    ino: ent.attrs.ino,
+                    kind: ent.attrs.kind,
                 },
             );
-            self.remove_dirent(parent, name).unwrap();
             reply.ok();
         } else {
-            reply.error(libc::EACCES);
+            let inode = self.lookup_dirent(parent, name).unwrap();
+            if let Ok(mut newparent) = self.read_inode(newparent) {
+                newparent.attrs.entries.insert(
+                    newname.to_str().unwrap().to_string(),
+                    DirEntry {
+                        ino: inode.attrs.ino,
+                        kind: inode.attrs.kind,
+                    },
+                );
+                self.remove_dirent(parent, name).unwrap();
+                reply.ok();
+            } else {
+                reply.error(libc::EACCES);
+            }
         }
     }
     fn symlink(
