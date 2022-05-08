@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::OsStr;
 
-use std::hash::Hash;
 use std::os::raw::c_int;
 
 use std::os::unix::prelude::{FileExt, OsStrExt};
@@ -240,7 +239,6 @@ impl SFS {
 
 impl Filesystem for SFS {
     fn init(&mut self, _req: &Request, _config: &mut KernelConfig) -> Result<(), c_int> {
-        println!("init");
         if self.read_inode(FUSE_ROOT_ID).is_none() {
             let mut root = self.new_inode();
             root.inner.kind = FileKind::Directory;
@@ -260,6 +258,7 @@ impl Filesystem for SFS {
         }
         Ok(())
     }
+    fn destroy(&mut self) {}
     fn open(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: fuser::ReplyOpen) {
         if let Some(_inode) = self.read_inode(ino) {
             reply.opened(0, 0);
@@ -616,7 +615,6 @@ impl Filesystem for SFS {
     ) {
         reply.error(libc::ENOSYS);
     }
-    fn destroy(&mut self) {}
     fn symlink(
         &mut self,
         _req: &Request<'_>,
