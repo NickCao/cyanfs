@@ -614,16 +614,4 @@ impl Filesystem for SFS {
             reply.error(libc::ENOENT);
         }
     }
-    fn fallocate(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        _fh: u64,
-        _offset: i64,
-        _length: i64,
-        _mode: i32,
-        reply: ReplyEmpty,
-    ) {
-        reply.error(libc::ENOSYS);
-    }
 }
