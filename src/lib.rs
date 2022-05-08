@@ -22,7 +22,7 @@ pub mod block_dev;
 const BLOCK_SIZE: usize = 512;
 const CACHE_SIZE: usize = 512;
 
-#[derive(Serialize, Deserialize, Copy, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
 pub enum FileKind {
     File,
     Directory,
@@ -33,6 +33,24 @@ pub struct Inode {
     pub inner: InodeInner,
     pub db: Arc<DB>,
     pub dev: Arc<Mutex<BlockCache<BLOCK_SIZE, CACHE_SIZE>>>,
+}
+
+impl Inode {
+    pub fn lookup(
+        db: Arc<DB>,
+        dev: Arc<Mutex<BlockCache<BLOCK_SIZE, CACHE_SIZE>>>,
+        ino: u64,
+    ) -> Result<Self, c_int> {
+        if let Some(inner) = db.get(ino.to_le_bytes()).map_err(|_| libc::EIO)? {
+            Ok(Inode {
+                inner: bincode::deserialize(&inner).map_err(|_| libc::EBADF)?,
+                db,
+                dev,
+            })
+        } else {
+            Err(libc::ENOENT)
+        }
+    }
 }
 
 impl Drop for Inode {
@@ -156,12 +174,8 @@ impl SFS {
             next_block: 0,
         }
     }
-    pub fn read_inode(&self, ino: u64) -> Option<Inode> {
-        self.db.get(ino.to_le_bytes()).unwrap().map(|value| Inode {
-            inner: bincode::deserialize(&value).unwrap(),
-            db: self.db.clone(),
-            dev: self.dev.clone(),
-        })
+    pub fn read_inode(&self, ino: u64) -> Result<Inode, c_int> {
+        Inode::lookup(self.db.clone(), self.dev.clone(), ino)
     }
     pub fn alloc_block(&mut self) -> usize {
         let block = self.next_block;
@@ -190,7 +204,7 @@ impl SFS {
         }
     }
     pub fn remove_dirent(&mut self, parent: u64, name: &OsStr) -> Option<()> {
-        if let Some(mut inode) = self.read_inode(parent) {
+        if let Ok(mut inode) = self.read_inode(parent) {
             if let Some(_entry) = inode.inner.entries.remove(name.to_str().unwrap()) {
                 Some(())
             } else {
@@ -201,7 +215,7 @@ impl SFS {
         }
     }
     pub fn lookup_dirent(&mut self, parent: u64, name: &OsStr) -> Option<Inode> {
-        if let Some(inode) = self.read_inode(parent) {
+        if let Ok(inode) = self.read_inode(parent) {
             inode
                 .inner
                 .entries
@@ -243,7 +257,7 @@ impl SFS {
 impl Filesystem for SFS {
     fn init(&mut self, _req: &Request, _config: &mut KernelConfig) -> Result<(), c_int> {
         simple_logger::SimpleLogger::new().init().unwrap();
-        if self.read_inode(FUSE_ROOT_ID).is_none() {
+        if self.read_inode(FUSE_ROOT_ID).is_err() {
             let mut root = self.new_inode();
             root.inner.kind = FileKind::Directory;
         }
@@ -279,7 +293,7 @@ impl Filesystem for SFS {
         reply: fuser::ReplyData,
     ) {
         assert!(offset >= 0);
-        if let Some(inode) = self.read_inode(ino) {
+        if let Ok(inode) = self.read_inode(ino) {
             let mut buf = vec![0u8; size as usize];
             let size = inode.read_at(&mut buf, offset as u64).unwrap();
             buf.truncate(size);
@@ -301,7 +315,7 @@ impl Filesystem for SFS {
         reply: fuser::ReplyWrite,
     ) {
         assert!(offset >= 0);
-        if let Some(mut inode) = self.read_inode(ino) {
+        if let Ok(mut inode) = self.read_inode(ino) {
             let new_size = offset as usize + data.len();
             if new_size > inode.inner.size as usize {
                 inode.inner.size = new_size as u64;
@@ -318,7 +332,7 @@ impl Filesystem for SFS {
     }
 
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        if let Some(inode) = self.read_inode(ino) {
+        if let Ok(inode) = self.read_inode(ino) {
             reply.attr(&Duration::new(0, 0), &inode.into());
         } else {
             reply.error(libc::EACCES);
@@ -334,7 +348,7 @@ impl Filesystem for SFS {
         mut reply: ReplyDirectory,
     ) {
         assert!(offset >= 0);
-        if let Some(inode) = self.read_inode(ino) {
+        if let Ok(inode) = self.read_inode(ino) {
             for (index, (name, entry)) in
                 inode.inner.entries.iter().skip(offset as usize).enumerate()
             {
@@ -369,7 +383,7 @@ impl Filesystem for SFS {
     }
 
     fn access(&mut self, _req: &Request, ino: u64, _mask: i32, reply: ReplyEmpty) {
-        if self.read_inode(ino).is_some() {
+        if self.read_inode(ino).is_ok() {
             reply.ok();
         } else {
             reply.error(libc::EACCES)
@@ -394,7 +408,7 @@ impl Filesystem for SFS {
         _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
-        if let Some(mut inode) = self.read_inode(ino) {
+        if let Ok(mut inode) = self.read_inode(ino) {
             if let Some(size) = size {
                 inode.inner.size = size;
             }
@@ -417,7 +431,7 @@ impl Filesystem for SFS {
         reply: ReplyEntry,
     ) {
         let file_type = mode & libc::S_IFMT as u32;
-        if let Some(mut parent) = self.read_inode(parent) {
+        if let Ok(mut parent) = self.read_inode(parent) {
             if parent.inner.kind != FileKind::Directory {
                 reply.error(libc::EACCES);
                 return;
@@ -448,7 +462,7 @@ impl Filesystem for SFS {
         };
     }
     fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        if let Some(mut inode) = self.read_inode(parent) {
+        if let Ok(mut inode) = self.read_inode(parent) {
             if inode.inner.entries.remove(name.to_str().unwrap()).is_some() {
                 reply.ok();
             } else {
@@ -474,7 +488,7 @@ impl Filesystem for SFS {
         _umask: u32,
         reply: ReplyEntry,
     ) {
-        if let Some(mut parent) = self.read_inode(parent) {
+        if let Ok(mut parent) = self.read_inode(parent) {
             if parent.inner.kind != FileKind::Directory {
                 reply.error(libc::EACCES);
                 return;
@@ -505,8 +519,8 @@ impl Filesystem for SFS {
         newname: &OsStr,
         reply: ReplyEntry,
     ) {
-        if let Some(mut inode) = self.read_inode(ino) {
-            if let Some(mut parent) = self.read_inode(newparent) {
+        if let Ok(mut inode) = self.read_inode(ino) {
+            if let Ok(mut parent) = self.read_inode(newparent) {
                 parent.inner.entries.insert(
                     newname.to_str().unwrap().to_string(),
                     DirEntry {
@@ -522,7 +536,7 @@ impl Filesystem for SFS {
         }
     }
     fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        if let Some(mut inode) = self.read_inode(parent) {
+        if let Ok(mut inode) = self.read_inode(parent) {
             if inode.inner.entries.remove(name.to_str().unwrap()).is_some() {
                 reply.ok();
             } else {
@@ -540,7 +554,7 @@ impl Filesystem for SFS {
         _datasync: bool,
         reply: ReplyEmpty,
     ) {
-        if let Some(inode) = self.read_inode(ino) {
+        if let Ok(inode) = self.read_inode(ino) {
             inode
                 .inner
                 .blocks
@@ -562,7 +576,7 @@ impl Filesystem for SFS {
         reply: ReplyEmpty,
     ) {
         let inode = self.lookup_dirent(parent, name).unwrap();
-        if let Some(mut newparent) = self.read_inode(newparent) {
+        if let Ok(mut newparent) = self.read_inode(newparent) {
             newparent.inner.entries.insert(
                 newname.to_str().unwrap().to_string(),
                 DirEntry {
@@ -584,7 +598,7 @@ impl Filesystem for SFS {
         link: &std::path::Path,
         reply: ReplyEntry,
     ) {
-        if let Some(mut parent) = self.read_inode(parent) {
+        if let Ok(mut parent) = self.read_inode(parent) {
             if parent.inner.kind != FileKind::Directory {
                 reply.error(libc::EACCES);
                 return;
@@ -609,7 +623,7 @@ impl Filesystem for SFS {
         };
     }
     fn readlink(&mut self, _req: &Request<'_>, ino: u64, reply: fuser::ReplyData) {
-        if let Some(inode) = self.read_inode(ino) {
+        if let Ok(inode) = self.read_inode(ino) {
             reply.data(inode.inner.link.as_os_str().as_bytes());
         } else {
             reply.error(libc::ENOENT);
