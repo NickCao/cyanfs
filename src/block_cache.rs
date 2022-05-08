@@ -56,6 +56,7 @@ impl<const BLOCK_SIZE: usize, const CACHE_SIZE: usize> BlockCache<BLOCK_SIZE, CA
     }
     pub fn write_block(&mut self, block_id: usize, buf: &[u8; BLOCK_SIZE]) -> Result<()> {
         if let Some(block) = self.cache.get_mut(&block_id) {
+            block.dirty = true;
             block.buffer.as_mut_slice().write_all(buf)
         } else {
             self.cache.put(
@@ -72,5 +73,8 @@ impl<const BLOCK_SIZE: usize, const CACHE_SIZE: usize> BlockCache<BLOCK_SIZE, CA
     }
     pub fn size(&self) -> Result<usize> {
         self.dev.size()
+    }
+    pub fn flush(&mut self) {
+        self.cache.clear()
     }
 }

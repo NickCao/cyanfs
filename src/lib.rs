@@ -260,7 +260,10 @@ impl Filesystem for SFS {
         }
         Ok(())
     }
-    fn destroy(&mut self) {}
+    fn destroy(&mut self) {
+        self.db.flush().unwrap();
+        self.dev.lock().unwrap().flush();
+    }
     fn open(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: fuser::ReplyOpen) {
         if let Some(_inode) = self.read_inode(ino) {
             reply.opened(0, 0);
