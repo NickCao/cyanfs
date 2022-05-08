@@ -1,4 +1,4 @@
-use bitmap_allocator::{BitAlloc, BitAlloc16M, BitAlloc256M};
+use bitmap_allocator::{BitAlloc, BitAlloc256M};
 use fuser::{
     Filesystem, KernelConfig, ReplyAttr, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyStatfs,
     Request, FUSE_ROOT_ID,
@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use std::vec;
 
-use std::alloc::{alloc, alloc_zeroed, Layout};
+use std::alloc::{alloc_zeroed, Layout};
 pub mod block_cache;
 pub mod block_dev;
 pub mod inode;
@@ -344,7 +344,15 @@ impl Filesystem for SFS {
     }
     fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
         if let Ok(mut inode) = self.read_inode(parent) {
-            if inode.attrs.entries.remove(name.to_str().unwrap()).is_some() {
+            if let Some(removed) = inode.attrs.entries.remove(name.to_str().unwrap()) {
+                let mut removed = self.read_inode(removed.ino).unwrap();
+                removed.attrs.nlink -= 1;
+                if removed.attrs.nlink == 0 {
+                    removed.attrs.blocks.iter().for_each(|&b| {
+                        self.block_allocator.dealloc(b);
+                    });
+                    self.inode_allocator.dealloc(removed.attrs.ino as usize);
+                }
                 reply.ok();
             } else {
                 reply.error(libc::ENOENT);

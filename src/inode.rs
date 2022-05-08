@@ -43,12 +43,16 @@ impl Inode {
 
 impl Drop for Inode {
     fn drop(&mut self) {
-        self.db
-            .put(
-                self.attrs.ino.to_le_bytes(),
-                &bincode::serialize(&self.attrs).unwrap(),
-            )
-            .unwrap();
+        if self.attrs.nlink != 0 {
+            self.db
+                .put(
+                    self.attrs.ino.to_le_bytes(),
+                    &bincode::serialize(&self.attrs).unwrap(),
+                )
+                .unwrap();
+        } else {
+            self.db.delete(self.attrs.ino.to_le_bytes()).unwrap();
+        }
     }
 }
 
