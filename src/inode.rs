@@ -59,7 +59,15 @@ impl Drop for Inode {
 impl FileExt for Inode {
     fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
         let mut data = vec![];
-        for block in &self.attrs.blocks {
+        let begin = offset as usize / BLOCK_SIZE;
+        let end = (offset as usize + buf.len() + (BLOCK_SIZE - 1)) / BLOCK_SIZE;
+        for block in self
+            .attrs
+            .blocks
+            .iter()
+            .skip(offset as usize / BLOCK_SIZE)
+            .take(end - begin)
+        {
             let mut buf = [0u8; BLOCK_SIZE];
             self.dev
                 .lock()
@@ -69,7 +77,8 @@ impl FileExt for Inode {
             data.extend_from_slice(&buf);
         }
         let size = std::cmp::min((self.attrs.size - offset) as usize, buf.len()) as usize;
-        buf[..size].copy_from_slice(&data[offset as usize..offset as usize + size]);
+        let off = offset as usize % BLOCK_SIZE;
+        buf[..size].copy_from_slice(&data[off..off + size]);
         Ok(size)
     }
     fn write_at(&self, buf: &[u8], offset: u64) -> std::io::Result<usize> {
