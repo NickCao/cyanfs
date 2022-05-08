@@ -21,6 +21,7 @@ use crate::inode::*;
 
 const BLOCK_SIZE: usize = 512;
 const CACHE_SIZE: usize = 512;
+const ROCKS_CACHE_SIZE: usize = 1 * 1024 * 1024 * 1024;
 
 pub struct SFS {
     db: Arc<DB>,
@@ -41,8 +42,12 @@ fn new_allocator(avail: Range<usize>) -> Box<BitAlloc256M> {
 
 impl SFS {
     pub fn new(meta: &str, data: &str) -> Self {
+        let cache = rocksdb::Cache::new_lru_cache(ROCKS_CACHE_SIZE).unwrap();
+        let mut options = rocksdb::Options::default();
+        options.create_if_missing(true);
+        options.set_row_cache(&cache);
         Self {
-            db: Arc::new(rocksdb::DB::open_default(meta).unwrap()),
+            db: Arc::new(rocksdb::DB::open(&options, meta).unwrap()),
             dev: Arc::new(Mutex::new(block_cache::BlockCache::new(data).unwrap())),
             block_allocator: new_allocator(0..BitAlloc256M::CAP),
             inode_allocator: new_allocator(FUSE_ROOT_ID as usize..BitAlloc256M::CAP),
@@ -138,7 +143,7 @@ impl SFS {
 
 impl Filesystem for SFS {
     fn init(&mut self, req: &Request, _config: &mut KernelConfig) -> Result<(), c_int> {
-        simple_logger::SimpleLogger::new().init().unwrap();
+        // simple_logger::SimpleLogger::new().init().unwrap();
         if self.read_inode(FUSE_ROOT_ID).is_err() {
             let mut root = self.new_inode(req, Some(FUSE_ROOT_ID));
             root.attrs.kind = FileType::Directory;
