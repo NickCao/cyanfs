@@ -1,22 +1,15 @@
-
 use fuser::{
     Filesystem, KernelConfig, ReplyAttr, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyStatfs,
     Request, FUSE_ROOT_ID,
 };
 use rocksdb::DB;
-
-
 use std::collections::HashMap;
 use std::ffi::OsStr;
-
 use std::os::raw::c_int;
-
 use std::os::unix::prelude::{FileExt, OsStrExt};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use std::vec;
-
-
 pub mod block_dev;
 pub mod block_cache;
 pub mod inode;
@@ -56,7 +49,7 @@ impl SFS {
     }
     pub fn new_inode(&mut self) -> Inode {
         Inode {
-            inner: InodeInner {
+            attrs: Attrs {
                 ino: self.alloc_inode() as u64,
                 size: 0,
                 kind: FileKind::File,
@@ -72,7 +65,7 @@ impl SFS {
     }
     pub fn remove_dirent(&mut self, parent: u64, name: &OsStr) -> Option<()> {
         if let Ok(mut inode) = self.read_inode(parent) {
-            if let Some(_entry) = inode.inner.entries.remove(name.to_str().unwrap()) {
+            if let Some(_entry) = inode.attrs.entries.remove(name.to_str().unwrap()) {
                 Some(())
             } else {
                 None
@@ -84,7 +77,7 @@ impl SFS {
     pub fn lookup_dirent(&mut self, parent: u64, name: &OsStr) -> Option<Inode> {
         if let Ok(inode) = self.read_inode(parent) {
             inode
-                .inner
+                .attrs
                 .entries
                 .get(name.to_str().unwrap())
                 .map(|entry| self.read_inode(entry.ino).unwrap())
@@ -102,12 +95,12 @@ impl SFS {
             self.dev.lock().unwrap().write_block(block, &buf).unwrap();
             new_blocks.push(block);
         }
-        inode.inner.size = data.len() as u64;
-        inode.inner.blocks = new_blocks;
+        inode.attrs.size = data.len() as u64;
+        inode.attrs.blocks = new_blocks;
     }
     pub fn read_data(&mut self, inode: &Inode) -> Vec<u8> {
         let mut data = vec![];
-        for block in &inode.inner.blocks {
+        for block in &inode.attrs.blocks {
             let mut buf = [0u8; BLOCK_SIZE];
             self.dev
                 .lock()
@@ -116,7 +109,7 @@ impl SFS {
                 .unwrap();
             data.extend_from_slice(&buf);
         }
-        data.truncate(inode.inner.size as usize);
+        data.truncate(inode.attrs.size as usize);
         data
     }
 }
@@ -126,11 +119,11 @@ impl Filesystem for SFS {
         simple_logger::SimpleLogger::new().init().unwrap();
         if self.read_inode(FUSE_ROOT_ID).is_err() {
             let mut root = self.new_inode();
-            root.inner.kind = FileKind::Directory;
+            root.attrs.kind = FileKind::Directory;
         }
         let it = self.db.iterator(rocksdb::IteratorMode::Start);
         for (_k, v) in it {
-            let inode: InodeInner = bincode::deserialize(&v).unwrap();
+            let inode: Attrs = bincode::deserialize(&v).unwrap();
             let ino = inode.ino as usize;
             if ino >= self.next_inode {
                 self.next_inode = ino + 1;
@@ -184,12 +177,12 @@ impl Filesystem for SFS {
         assert!(offset >= 0);
         if let Ok(mut inode) = self.read_inode(ino) {
             let new_size = offset as usize + data.len();
-            if new_size > inode.inner.size as usize {
-                inode.inner.size = new_size as u64;
+            if new_size > inode.attrs.size as usize {
+                inode.attrs.size = new_size as u64;
             }
             let block_cnt = (new_size + (BLOCK_SIZE - 1)) / BLOCK_SIZE;
-            while block_cnt > inode.inner.blocks.len() {
-                inode.inner.blocks.push(self.alloc_block());
+            while block_cnt > inode.attrs.blocks.len() {
+                inode.attrs.blocks.push(self.alloc_block());
             }
             let size = inode.write_at(data, offset as u64).unwrap();
             reply.written(size as u32);
@@ -217,7 +210,7 @@ impl Filesystem for SFS {
         assert!(offset >= 0);
         if let Ok(inode) = self.read_inode(ino) {
             for (index, (name, entry)) in
-                inode.inner.entries.iter().skip(offset as usize).enumerate()
+                inode.attrs.entries.iter().skip(offset as usize).enumerate()
             {
                 let buffer_full: bool = reply.add(
                     entry.ino,
@@ -277,10 +270,10 @@ impl Filesystem for SFS {
     ) {
         if let Ok(mut inode) = self.read_inode(ino) {
             if let Some(size) = size {
-                inode.inner.size = size;
+                inode.attrs.size = size;
             }
             if let Some(mode) = mode {
-                inode.inner.perm = mode as u16;
+                inode.attrs.perm = mode as u16;
             }
             reply.attr(&Duration::new(0, 0), &inode.into());
         } else {
@@ -299,19 +292,19 @@ impl Filesystem for SFS {
     ) {
         let file_type = mode & libc::S_IFMT as u32;
         if let Ok(mut parent) = self.read_inode(parent) {
-            if parent.inner.kind != FileKind::Directory {
+            if parent.attrs.kind != FileKind::Directory {
                 reply.error(libc::EACCES);
                 return;
             }
             let new_inode = self.new_inode();
-            if parent.inner.entries.contains_key(name.to_str().unwrap()) {
+            if parent.attrs.entries.contains_key(name.to_str().unwrap()) {
                 reply.error(libc::EEXIST);
                 return;
             }
-            parent.inner.entries.insert(
+            parent.attrs.entries.insert(
                 name.to_str().unwrap().to_string(),
                 DirEntry {
-                    ino: new_inode.inner.ino,
+                    ino: new_inode.attrs.ino,
                     kind: match file_type {
                         libc::S_IFREG => FileKind::File,
                         libc::S_IFLNK => FileKind::Symlink,
@@ -330,7 +323,7 @@ impl Filesystem for SFS {
     }
     fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
         if let Ok(mut inode) = self.read_inode(parent) {
-            if inode.inner.entries.remove(name.to_str().unwrap()).is_some() {
+            if inode.attrs.entries.remove(name.to_str().unwrap()).is_some() {
                 reply.ok();
             } else {
                 reply.error(libc::ENOENT);
@@ -356,20 +349,20 @@ impl Filesystem for SFS {
         reply: ReplyEntry,
     ) {
         if let Ok(mut parent) = self.read_inode(parent) {
-            if parent.inner.kind != FileKind::Directory {
+            if parent.attrs.kind != FileKind::Directory {
                 reply.error(libc::EACCES);
                 return;
             }
             let mut new_inode = self.new_inode();
-            new_inode.inner.kind = FileKind::Directory;
-            if parent.inner.entries.contains_key(name.to_str().unwrap()) {
+            new_inode.attrs.kind = FileKind::Directory;
+            if parent.attrs.entries.contains_key(name.to_str().unwrap()) {
                 reply.error(libc::EEXIST);
                 return;
             }
-            parent.inner.entries.insert(
+            parent.attrs.entries.insert(
                 name.to_str().unwrap().to_string(),
                 DirEntry {
-                    ino: new_inode.inner.ino,
+                    ino: new_inode.attrs.ino,
                     kind: FileKind::Directory,
                 },
             );
@@ -388,14 +381,14 @@ impl Filesystem for SFS {
     ) {
         if let Ok(mut inode) = self.read_inode(ino) {
             if let Ok(mut parent) = self.read_inode(newparent) {
-                parent.inner.entries.insert(
+                parent.attrs.entries.insert(
                     newname.to_str().unwrap().to_string(),
                     DirEntry {
-                        ino: inode.inner.ino,
-                        kind: inode.inner.kind,
+                        ino: inode.attrs.ino,
+                        kind: inode.attrs.kind,
                     },
                 );
-                inode.inner.nlinks += 1;
+                inode.attrs.nlinks += 1;
                 reply.entry(&Duration::new(0, 0), &inode.into(), 0);
             }
         } else {
@@ -404,7 +397,7 @@ impl Filesystem for SFS {
     }
     fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
         if let Ok(mut inode) = self.read_inode(parent) {
-            if inode.inner.entries.remove(name.to_str().unwrap()).is_some() {
+            if inode.attrs.entries.remove(name.to_str().unwrap()).is_some() {
                 reply.ok();
             } else {
                 reply.error(libc::ENOENT);
@@ -423,7 +416,7 @@ impl Filesystem for SFS {
     ) {
         if let Ok(inode) = self.read_inode(ino) {
             inode
-                .inner
+                .attrs
                 .blocks
                 .iter()
                 .for_each(|&block| self.dev.lock().unwrap().flush_block(block));
@@ -444,11 +437,11 @@ impl Filesystem for SFS {
     ) {
         let inode = self.lookup_dirent(parent, name).unwrap();
         if let Ok(mut newparent) = self.read_inode(newparent) {
-            newparent.inner.entries.insert(
+            newparent.attrs.entries.insert(
                 newname.to_str().unwrap().to_string(),
                 DirEntry {
-                    ino: inode.inner.ino,
-                    kind: inode.inner.kind,
+                    ino: inode.attrs.ino,
+                    kind: inode.attrs.kind,
                 },
             );
             self.remove_dirent(parent, name).unwrap();
@@ -466,21 +459,21 @@ impl Filesystem for SFS {
         reply: ReplyEntry,
     ) {
         if let Ok(mut parent) = self.read_inode(parent) {
-            if parent.inner.kind != FileKind::Directory {
+            if parent.attrs.kind != FileKind::Directory {
                 reply.error(libc::EACCES);
                 return;
             }
             let mut new_inode = self.new_inode();
-            new_inode.inner.kind = FileKind::Symlink;
-            new_inode.inner.link = link.to_path_buf();
-            if parent.inner.entries.contains_key(name.to_str().unwrap()) {
+            new_inode.attrs.kind = FileKind::Symlink;
+            new_inode.attrs.link = link.to_path_buf();
+            if parent.attrs.entries.contains_key(name.to_str().unwrap()) {
                 reply.error(libc::EEXIST);
                 return;
             }
-            parent.inner.entries.insert(
+            parent.attrs.entries.insert(
                 name.to_str().unwrap().to_string(),
                 DirEntry {
-                    ino: new_inode.inner.ino,
+                    ino: new_inode.attrs.ino,
                     kind: FileKind::Symlink,
                 },
             );
@@ -491,7 +484,7 @@ impl Filesystem for SFS {
     }
     fn readlink(&mut self, _req: &Request<'_>, ino: u64, reply: fuser::ReplyData) {
         if let Ok(inode) = self.read_inode(ino) {
-            reply.data(inode.inner.link.as_os_str().as_bytes());
+            reply.data(inode.attrs.link.as_os_str().as_bytes());
         } else {
             reply.error(libc::ENOENT);
         }
