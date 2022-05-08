@@ -295,7 +295,7 @@ impl Filesystem for SFS {
         parent: u64,
         name: &OsStr,
         mode: u32,
-        _umask: u32,
+        umask: u32,
         _rdev: u32,
         reply: ReplyEntry,
     ) {
@@ -305,7 +305,8 @@ impl Filesystem for SFS {
                 reply.error(libc::EACCES);
                 return;
             }
-            let new_inode = self.new_inode(req);
+            let mut new_inode = self.new_inode(req);
+            new_inode.attrs.perm = (mode & !umask) as u16;
             if parent.attrs.entries.contains_key(name.to_str().unwrap()) {
                 reply.error(libc::EEXIST);
                 return;
