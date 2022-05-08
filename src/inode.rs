@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 use std::vec;
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
 pub enum FileType {
     RegularFile,
     Directory,
@@ -116,7 +116,7 @@ pub struct Attrs {
     pub link: std::path::PathBuf,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct DirEntry {
     pub ino: u64,
     pub kind: FileType,

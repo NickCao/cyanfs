@@ -6,13 +6,14 @@ use fuser::{
 use rocksdb::DB;
 use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::ops::Range;
 use std::os::raw::c_int;
 use std::os::unix::prelude::{FileExt, OsStrExt};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use std::vec;
 
-use std::alloc::{alloc, Layout};
+use std::alloc::{alloc, alloc_zeroed, Layout};
 pub mod block_cache;
 pub mod block_dev;
 pub mod inode;
@@ -28,13 +29,13 @@ pub struct SFS {
     inode_allocator: Box<BitAlloc256M>,
 }
 
-fn new_allocator() -> Box<BitAlloc256M> {
+fn new_allocator(avail: Range<usize>) -> Box<BitAlloc256M> {
     let mut allocator = unsafe {
         let layout = Layout::new::<BitAlloc256M>();
-        let ptr = alloc(layout) as *mut BitAlloc256M;
+        let ptr = alloc_zeroed(layout) as *mut BitAlloc256M;
         Box::from_raw(ptr)
     };
-    allocator.insert(0..BitAlloc256M::CAP);
+    allocator.insert(avail);
     allocator
 }
 
@@ -43,8 +44,8 @@ impl SFS {
         Self {
             db: Arc::new(rocksdb::DB::open_default(meta).unwrap()),
             dev: Arc::new(Mutex::new(block_cache::BlockCache::new(data).unwrap())),
-            block_allocator: new_allocator(),
-            inode_allocator: new_allocator(),
+            block_allocator: new_allocator(0..BitAlloc256M::CAP),
+            inode_allocator: new_allocator(FUSE_ROOT_ID as usize..BitAlloc256M::CAP),
         }
     }
     pub fn read_inode(&self, ino: u64) -> Result<Inode, c_int> {

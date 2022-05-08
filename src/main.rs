@@ -9,7 +9,7 @@ fn main() {
         MountOption::DefaultPermissions,
     ];
     mount2(
-        SFS::new("/tmp/sfs-meta", "/tmp/sfs-data"),
+        SFS::new("/tmp/sfs-meta", "/dev/nvme0n1p3"),
         "/tmp/sfs",
         &options,
     )
