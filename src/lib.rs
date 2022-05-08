@@ -264,6 +264,7 @@ impl Filesystem for SFS {
         self.db.flush().unwrap();
         self.dev.lock().unwrap().flush();
     }
+    fn forget(&mut self, _req: &Request<'_>, _ino: u64, _nlookup: u64) {}
     fn read(
         &mut self,
         _req: &Request<'_>,
@@ -547,20 +548,6 @@ impl Filesystem for SFS {
             reply.error(libc::EBADF);
         }
     }
-    fn ioctl(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        _fh: u64,
-        _flags: u32,
-        _cmd: u32,
-        _in_data: &[u8],
-        _out_size: u32,
-        reply: fuser::ReplyIoctl,
-    ) {
-        reply.error(libc::ENOSYS);
-    }
-    fn forget(&mut self, _req: &Request<'_>, _ino: u64, _nlookup: u64) {}
     fn lseek(
         &mut self,
         _req: &Request<'_>,
