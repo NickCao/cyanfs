@@ -39,7 +39,7 @@ impl Drop for Inode {
     fn drop(&mut self) {
         self.db
             .put(
-                self.inner.ino.to_ne_bytes(),
+                self.inner.ino.to_le_bytes(),
                 &bincode::serialize(&self.inner).unwrap(),
             )
             .unwrap();
@@ -157,7 +157,7 @@ impl SFS {
         }
     }
     pub fn read_inode(&self, ino: u64) -> Option<Inode> {
-        self.db.get(ino.to_ne_bytes()).unwrap().map(|value| Inode {
+        self.db.get(ino.to_le_bytes()).unwrap().map(|value| Inode {
             inner: bincode::deserialize(&value).unwrap(),
             db: self.db.clone(),
             dev: self.dev.clone(),
