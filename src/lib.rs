@@ -6,6 +6,7 @@ use fuser::{
 use rocksdb::DB;
 use serde::{Deserialize, Serialize};
 
+use std::collections::HashMap;
 use std::ffi::OsStr;
 
 use std::os::raw::c_int;
@@ -97,10 +98,11 @@ pub struct InodeInner {
     pub blocks: Vec<usize>,
 }
 
+type Directory = HashMap<String, DirEntry>;
+
 #[derive(Serialize, Deserialize)]
 struct DirEntry {
     pub ino: u64,
-    pub name: String,
     pub kind: FileKind,
 }
 
@@ -186,6 +188,33 @@ impl SFS {
             dev: self.dev.clone(),
         }
     }
+    pub fn remove_dirent(&mut self, parent: u64, name: &OsStr) -> Option<()> {
+        if let Some(mut inode) = self.read_inode(parent) {
+            let data = self.read_data(&inode);
+            let mut entries: Directory = bincode::deserialize(&data).unwrap();
+            if let Some(_entry) = entries.remove(name.to_str().unwrap()) {
+                self.replace_data(&mut inode, &bincode::serialize(&entries).unwrap());
+                Some(())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+    pub fn lookup_dirent(&mut self, parent: u64, name: &OsStr) -> Option<Inode> {
+        if let Some(inode) = self.read_inode(parent) {
+            let data = self.read_data(&inode);
+            let entries: Directory = bincode::deserialize(&data).unwrap();
+            if let Some(entry) = entries.get(name.to_str().unwrap()) {
+                Some(self.read_inode(entry.ino).unwrap())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
     pub fn replace_data(&mut self, inode: &mut Inode, data: &[u8]) {
         let mut new_blocks = vec![];
         let chunks = data.chunks(BLOCK_SIZE);
@@ -221,8 +250,7 @@ impl Filesystem for SFS {
         if self.read_inode(FUSE_ROOT_ID).is_none() {
             let mut root = self.new_inode();
             root.inner.kind = FileKind::Directory;
-            let empty: Vec<DirEntry> = vec![];
-            self.replace_data(&mut root, &bincode::serialize(&empty).unwrap())
+            self.replace_data(&mut root, &bincode::serialize(&Directory::new()).unwrap())
         }
         let it = self.db.iterator(rocksdb::IteratorMode::Start);
         for (k, v) in it {
@@ -319,13 +347,13 @@ impl Filesystem for SFS {
         assert!(offset >= 0);
         if let Some(inode) = self.read_inode(ino) {
             let data = self.read_data(&inode);
-            let entries: Vec<DirEntry> = bincode::deserialize(&data).unwrap();
-            for (index, entry) in entries.iter().skip(offset as usize).enumerate() {
+            let entries: Directory = bincode::deserialize(&data).unwrap();
+            for (index, (name, entry)) in entries.iter().skip(offset as usize).enumerate() {
                 let buffer_full: bool = reply.add(
                     entry.ino,
                     offset + index as i64 + 1,
                     entry.kind.into(),
-                    OsStr::new(&entry.name),
+                    OsStr::new(&name),
                 );
                 if buffer_full {
                     break;
@@ -398,37 +426,39 @@ impl Filesystem for SFS {
                 reply.error(libc::EACCES);
                 return;
             }
-            let mut entries: Vec<DirEntry> =
-                bincode::deserialize(&self.read_data(&parent)).unwrap();
+            let mut entries: Directory = bincode::deserialize(&self.read_data(&parent)).unwrap();
             let new_inode = self.new_inode();
-            let entry = DirEntry {
-                ino: new_inode.inner.ino,
-                name: name.to_string_lossy().to_string(),
-                kind: FileKind::File,
-            };
-            entries.push(entry);
+            if entries.contains_key(name.to_str().unwrap()) {
+                reply.error(libc::EEXIST);
+                return;
+            }
+            entries.insert(
+                name.to_str().unwrap().to_string(),
+                DirEntry {
+                    ino: new_inode.inner.ino,
+                    kind: FileKind::File,
+                },
+            );
             self.replace_data(&mut parent, &bincode::serialize(&entries).unwrap());
             reply.entry(&Duration::new(0, 0), &new_inode.into(), 0);
         } else {
             reply.error(libc::EACCES);
         };
     }
+    fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+        print!("unlink");
+        if let Some(entry) = self.remove_dirent(parent, name) {
+            reply.ok();
+        } else {
+            reply.error(libc::ENOENT);
+        }
+    }
     fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
         print!("lookup");
-        if let Some(inode) = self.read_inode(parent) {
-            let data = self.read_data(&inode);
-            let entries: Vec<DirEntry> = bincode::deserialize(&data).unwrap();
-            if let Some(entry) = entries.iter().find(|e| OsStr::new(&e.name) == name) {
-                reply.entry(
-                    &Duration::new(0, 0),
-                    &self.read_inode(entry.ino).unwrap().into(),
-                    0,
-                );
-            } else {
-                reply.error(libc::ENOENT);
-            }
+        if let Some(entry) = self.lookup_dirent(parent, name) {
+            reply.entry(&Duration::new(0, 0), &entry.into(), 0);
         } else {
-            reply.error(libc::EACCES);
+            reply.error(libc::ENOENT);
         }
     }
 
@@ -447,18 +477,24 @@ impl Filesystem for SFS {
                 reply.error(libc::EACCES);
                 return;
             }
-            let mut entries: Vec<DirEntry> =
-                bincode::deserialize(&self.read_data(&parent)).unwrap();
+            let mut entries: Directory = bincode::deserialize(&self.read_data(&parent)).unwrap();
             let mut new_inode = self.new_inode();
             new_inode.inner.kind = FileKind::Directory;
-            let empty: Vec<DirEntry> = vec![];
-            self.replace_data(&mut new_inode, &bincode::serialize(&empty).unwrap());
-            let entry = DirEntry {
-                ino: new_inode.inner.ino,
-                name: name.to_string_lossy().to_string(),
-                kind: FileKind::Directory,
-            };
-            entries.push(entry);
+            self.replace_data(
+                &mut new_inode,
+                &bincode::serialize(&Directory::new()).unwrap(),
+            );
+            if entries.contains_key(name.to_str().unwrap()) {
+                reply.error(libc::EEXIST);
+                return;
+            }
+            entries.insert(
+                name.to_str().unwrap().to_string(),
+                DirEntry {
+                    ino: new_inode.inner.ino,
+                    kind: FileKind::Directory,
+                },
+            );
             self.replace_data(&mut parent, &bincode::serialize(&entries).unwrap());
             reply.entry(&Duration::new(0, 0), &new_inode.into(), 0);
         } else {
