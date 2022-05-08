@@ -264,13 +264,6 @@ impl Filesystem for SFS {
         self.db.flush().unwrap();
         self.dev.lock().unwrap().flush();
     }
-    fn open(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: fuser::ReplyOpen) {
-        if let Some(_inode) = self.read_inode(ino) {
-            reply.opened(0, 0);
-        } else {
-            reply.error(libc::ENOENT);
-        }
-    }
     fn read(
         &mut self,
         _req: &Request<'_>,
@@ -648,9 +641,6 @@ impl Filesystem for SFS {
         _flush: bool,
         _reply: ReplyEmpty,
     ) {
-    }
-    fn opendir(&mut self, _req: &Request<'_>, _ino: u64, _flags: i32, reply: fuser::ReplyOpen) {
-        reply.error(libc::ENOSYS);
     }
     fn readlink(&mut self, _req: &Request<'_>, _ino: u64, _reply: fuser::ReplyData) {}
     fn fsyncdir(
