@@ -155,15 +155,11 @@ impl SFS {
         }
     }
     pub fn read_inode(&self, ino: u64) -> Option<Inode> {
-        if let Some(value) = self.db.get(ino.to_ne_bytes()).unwrap() {
-            Some(Inode {
+        self.db.get(ino.to_ne_bytes()).unwrap().map(|value| Inode {
                 inner: bincode::deserialize(&value).unwrap(),
                 db: self.db.clone(),
                 dev: self.dev.clone(),
             })
-        } else {
-            None
-        }
     }
     pub fn alloc_block(&mut self) -> usize {
         let block = self.next_block;
@@ -206,11 +202,7 @@ impl SFS {
         if let Some(inode) = self.read_inode(parent) {
             let data = self.read_data(&inode);
             let entries: Directory = bincode::deserialize(&data).unwrap();
-            if let Some(entry) = entries.get(name.to_str().unwrap()) {
-                Some(self.read_inode(entry.ino).unwrap())
-            } else {
-                None
-            }
+            entries.get(name.to_str().unwrap()).map(|entry| self.read_inode(entry.ino).unwrap())
         } else {
             None
         }
@@ -253,7 +245,7 @@ impl Filesystem for SFS {
             self.replace_data(&mut root, &bincode::serialize(&Directory::new()).unwrap())
         }
         let it = self.db.iterator(rocksdb::IteratorMode::Start);
-        for (k, v) in it {
+        for (_k, v) in it {
             let inode: InodeInner = bincode::deserialize(&v).unwrap();
             let ino = inode.ino as usize;
             if ino >= self.next_inode {
@@ -278,11 +270,11 @@ impl Filesystem for SFS {
         &mut self,
         _req: &Request<'_>,
         ino: u64,
-        fh: u64,
+        _fh: u64,
         offset: i64,
         size: u32,
-        flags: i32,
-        lock_owner: Option<u64>,
+        _flags: i32,
+        _lock_owner: Option<u64>,
         reply: fuser::ReplyData,
     ) {
         println!("read");
@@ -300,12 +292,12 @@ impl Filesystem for SFS {
         &mut self,
         _req: &Request<'_>,
         ino: u64,
-        fh: u64,
+        _fh: u64,
         offset: i64,
         data: &[u8],
-        write_flags: u32,
-        flags: i32,
-        lock_owner: Option<u64>,
+        _write_flags: u32,
+        _flags: i32,
+        _lock_owner: Option<u64>,
         reply: fuser::ReplyWrite,
     ) {
         println!("write");
@@ -425,9 +417,9 @@ impl Filesystem for SFS {
         _req: &Request<'_>,
         parent: u64,
         name: &OsStr,
-        mode: u32,
-        umask: u32,
-        rdev: u32,
+        _mode: u32,
+        _umask: u32,
+        _rdev: u32,
         reply: ReplyEntry,
     ) {
         println!("mknod");
@@ -457,7 +449,7 @@ impl Filesystem for SFS {
     }
     fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
         print!("unlink");
-        if let Some(entry) = self.remove_dirent(parent, name) {
+        if let Some(_entry) = self.remove_dirent(parent, name) {
             reply.ok();
         } else {
             reply.error(libc::ENOENT);
@@ -476,7 +468,7 @@ impl Filesystem for SFS {
         _req: &Request<'_>,
         parent: u64,
         name: &OsStr,
-        mode: u32,
+        _mode: u32,
         _umask: u32,
         reply: ReplyEntry,
     ) {
@@ -509,5 +501,196 @@ impl Filesystem for SFS {
         } else {
             reply.error(libc::EACCES);
         };
+    }
+    fn link(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _newparent: u64,
+        _newname: &OsStr,
+        _reply: ReplyEntry,
+    ) {
+    }
+    fn rmdir(&mut self, _req: &Request<'_>, _parent: u64, _name: &OsStr, _reply: ReplyEmpty) {}
+    fn bmap(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _blocksize: u32,
+        _idx: u64,
+        _reply: fuser::ReplyBmap,
+    ) {
+    }
+    fn flush(&mut self, _req: &Request<'_>, _ino: u64, _fh: u64, _lock_owner: u64, _reply: ReplyEmpty) {
+    }
+    fn fsync(&mut self, _req: &Request<'_>, _ino: u64, _fh: u64, _datasync: bool, _reply: ReplyEmpty) {}
+    fn getlk(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _fh: u64,
+        _lock_owner: u64,
+        _start: u64,
+        _end: u64,
+        _typ: i32,
+        _pid: u32,
+        _reply: fuser::ReplyLock,
+    ) {
+    }
+    fn setlk(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _fh: u64,
+        _lock_owner: u64,
+        _start: u64,
+        _end: u64,
+        _typ: i32,
+        _pid: u32,
+        _sleep: bool,
+        _reply: ReplyEmpty,
+    ) {
+    }
+    fn ioctl(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _fh: u64,
+        _flags: u32,
+        _cmd: u32,
+        _in_data: &[u8],
+        _out_size: u32,
+        _reply: fuser::ReplyIoctl,
+    ) {
+    }
+    fn forget(&mut self, _req: &Request<'_>, _ino: u64, _nlookup: u64) {}
+    fn lseek(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _fh: u64,
+        _offset: i64,
+        _whence: i32,
+        _reply: fuser::ReplyLseek,
+    ) {
+    }
+    fn rename(
+        &mut self,
+        _req: &Request<'_>,
+        _parent: u64,
+        _name: &OsStr,
+        _newparent: u64,
+        _newname: &OsStr,
+        _flags: u32,
+        _reply: ReplyEmpty,
+    ) {
+    }
+    fn create(
+        &mut self,
+        _req: &Request<'_>,
+        _parent: u64,
+        _name: &OsStr,
+        _mode: u32,
+        _umask: u32,
+        _flags: i32,
+        _reply: fuser::ReplyCreate,
+    ) {
+    }
+    fn destroy(&mut self) {}
+    fn symlink(
+        &mut self,
+        _req: &Request<'_>,
+        _parent: u64,
+        _name: &OsStr,
+        _link: &std::path::Path,
+        _reply: ReplyEntry,
+    ) {
+    }
+    fn release(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _fh: u64,
+        _flags: i32,
+        _lock_owner: Option<u64>,
+        _flush: bool,
+        _reply: ReplyEmpty,
+    ) {
+    }
+    fn opendir(&mut self, _req: &Request<'_>, _ino: u64, _flags: i32, _reply: fuser::ReplyOpen) {}
+    fn readlink(&mut self, _req: &Request<'_>, _ino: u64, _reply: fuser::ReplyData) {}
+    fn fsyncdir(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _fh: u64,
+        _datasync: bool,
+        _reply: ReplyEmpty,
+    ) {
+    }
+    fn setxattr(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _name: &OsStr,
+        _value: &[u8],
+        _flags: i32,
+        _position: u32,
+        _reply: ReplyEmpty,
+    ) {
+    }
+    fn getxattr(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _name: &OsStr,
+        _size: u32,
+        _reply: fuser::ReplyXattr,
+    ) {
+    }
+    fn listxattr(&mut self, _req: &Request<'_>, _ino: u64, _size: u32, _reply: fuser::ReplyXattr) {}
+    fn fallocate(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _fh: u64,
+        _offset: i64,
+        _length: i64,
+        _mode: i32,
+        _reply: ReplyEmpty,
+    ) {
+    }
+    fn releasedir(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _fh: u64,
+        _flags: i32,
+        _reply: ReplyEmpty,
+    ) {
+    }
+    fn readdirplus(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _fh: u64,
+        _offset: i64,
+        _reply: fuser::ReplyDirectoryPlus,
+    ) {
+    }
+    fn removexattr(&mut self, _req: &Request<'_>, _ino: u64, _name: &OsStr, _reply: ReplyEmpty) {}
+    fn copy_file_range(
+        &mut self,
+        _req: &Request<'_>,
+        _ino_in: u64,
+        _fh_in: u64,
+        _offset_in: i64,
+        _ino_out: u64,
+        _fh_out: u64,
+        _offset_out: i64,
+        _len: u64,
+        _flags: u32,
+        _reply: fuser::ReplyWrite,
+    ) {
     }
 }
