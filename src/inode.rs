@@ -61,13 +61,7 @@ impl FileExt for Inode {
         let mut data = vec![];
         let begin = offset as usize / BLOCK_SIZE;
         let end = (offset as usize + buf.len() + (BLOCK_SIZE - 1)) / BLOCK_SIZE;
-        for block in self
-            .attrs
-            .blocks
-            .iter()
-            .skip(offset as usize / BLOCK_SIZE)
-            .take(end - begin)
-        {
+        for block in self.attrs.blocks.iter().skip(begin).take(end - begin) {
             let mut buf = [0u8; BLOCK_SIZE];
             self.dev
                 .lock()
@@ -83,7 +77,9 @@ impl FileExt for Inode {
     }
     fn write_at(&self, buf: &[u8], offset: u64) -> std::io::Result<usize> {
         let mut data = vec![];
-        for block in &self.attrs.blocks {
+        let begin = offset as usize / BLOCK_SIZE;
+        let end = (offset as usize + buf.len() + (BLOCK_SIZE - 1)) / BLOCK_SIZE;
+        for block in self.attrs.blocks.iter().skip(begin).take(end - begin) {
             let mut buf = [0u8; BLOCK_SIZE];
             self.dev
                 .lock()
@@ -92,8 +88,16 @@ impl FileExt for Inode {
                 .unwrap();
             data.extend_from_slice(&buf);
         }
-        data[offset as usize..offset as usize + buf.len()].copy_from_slice(buf);
-        for (i, block) in self.attrs.blocks.iter().enumerate() {
+        let off = offset as usize % BLOCK_SIZE;
+        data[off..off + buf.len()].copy_from_slice(buf);
+        for (i, block) in self
+            .attrs
+            .blocks
+            .iter()
+            .skip(begin)
+            .take(end - begin)
+            .enumerate()
+        {
             self.dev
                 .lock()
                 .unwrap()
