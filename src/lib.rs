@@ -530,16 +530,6 @@ impl Filesystem for SFS {
     fn rmdir(&mut self, _req: &Request<'_>, _parent: u64, _name: &OsStr, reply: ReplyEmpty) {
         reply.error(libc::ENOSYS);
     }
-    fn bmap(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        _blocksize: u32,
-        _idx: u64,
-        reply: fuser::ReplyBmap,
-    ) {
-        reply.error(libc::ENOSYS);
-    }
     fn flush(
         &mut self,
         _req: &Request<'_>,
