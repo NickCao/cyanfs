@@ -607,6 +607,28 @@ impl Filesystem for SFS {
             reply.error(libc::ENOENT);
         }
     }
+    fn fallocate(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _fh: u64,
+        _offset: i64,
+        _length: i64,
+        _mode: i32,
+        reply: ReplyEmpty,
+    ) {
+        reply.error(libc::ENOSYS);
+    }
+    fn readdirplus(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _fh: u64,
+        _offset: i64,
+        reply: fuser::ReplyDirectoryPlus,
+    ) {
+        reply.error(libc::ENOSYS);
+    }
     fn setxattr(
         &mut self,
         _req: &Request<'_>,
@@ -668,28 +690,6 @@ impl Filesystem for SFS {
         } else {
             reply.error(libc::EBADF);
         }
-    }
-    fn fallocate(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        _fh: u64,
-        _offset: i64,
-        _length: i64,
-        _mode: i32,
-        reply: ReplyEmpty,
-    ) {
-        reply.error(libc::ENOSYS);
-    }
-    fn readdirplus(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        _fh: u64,
-        _offset: i64,
-        reply: fuser::ReplyDirectoryPlus,
-    ) {
-        reply.error(libc::ENOSYS);
     }
     fn removexattr(&mut self, _req: &Request<'_>, ino: u64, name: &OsStr, reply: ReplyEmpty) {
         if let Some(mut inode) = self.read_inode(ino) {
