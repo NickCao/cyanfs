@@ -512,18 +512,25 @@ impl Filesystem for SFS {
         _ino: u64,
         _newparent: u64,
         _newname: &OsStr,
-        _reply: ReplyEntry,
+        reply: ReplyEntry,
     ) {
+
+        reply.error(libc::ENOSYS);
     }
-    fn rmdir(&mut self, _req: &Request<'_>, _parent: u64, _name: &OsStr, _reply: ReplyEmpty) {}
+    fn rmdir(&mut self, _req: &Request<'_>, _parent: u64, _name: &OsStr, reply: ReplyEmpty) {
+
+        reply.error(libc::ENOSYS);
+    }
     fn bmap(
         &mut self,
         _req: &Request<'_>,
         _ino: u64,
         _blocksize: u32,
         _idx: u64,
-        _reply: fuser::ReplyBmap,
+        reply: fuser::ReplyBmap,
     ) {
+
+        reply.error(libc::ENOSYS);
     }
     fn flush(
         &mut self,
@@ -531,8 +538,10 @@ impl Filesystem for SFS {
         _ino: u64,
         _fh: u64,
         _lock_owner: u64,
-        _reply: ReplyEmpty,
+        reply: ReplyEmpty,
     ) {
+
+        reply.error(libc::ENOSYS);
     }
     fn fsync(
         &mut self,
@@ -540,8 +549,10 @@ impl Filesystem for SFS {
         _ino: u64,
         _fh: u64,
         _datasync: bool,
-        _reply: ReplyEmpty,
+        reply: ReplyEmpty,
     ) {
+
+        reply.error(libc::ENOSYS);
     }
     fn getlk(
         &mut self,
@@ -553,8 +564,10 @@ impl Filesystem for SFS {
         _end: u64,
         _typ: i32,
         _pid: u32,
-        _reply: fuser::ReplyLock,
+        reply: fuser::ReplyLock,
     ) {
+
+        reply.error(libc::ENOSYS);
     }
     fn setlk(
         &mut self,
@@ -567,8 +580,10 @@ impl Filesystem for SFS {
         _typ: i32,
         _pid: u32,
         _sleep: bool,
-        _reply: ReplyEmpty,
+        reply: ReplyEmpty,
     ) {
+
+        reply.error(libc::ENOSYS);
     }
     fn ioctl(
         &mut self,
@@ -579,10 +594,13 @@ impl Filesystem for SFS {
         _cmd: u32,
         _in_data: &[u8],
         _out_size: u32,
-        _reply: fuser::ReplyIoctl,
+        reply: fuser::ReplyIoctl,
     ) {
+
+        reply.error(libc::ENOSYS);
     }
-    fn forget(&mut self, _req: &Request<'_>, _ino: u64, _nlookup: u64) {}
+    fn forget(&mut self, _req: &Request<'_>, _ino: u64, _nlookup: u64) {
+    }
     fn lseek(
         &mut self,
         _req: &Request<'_>,
@@ -590,8 +608,10 @@ impl Filesystem for SFS {
         _fh: u64,
         _offset: i64,
         _whence: i32,
-        _reply: fuser::ReplyLseek,
+        reply: fuser::ReplyLseek,
     ) {
+
+        reply.error(libc::ENOSYS);
     }
     fn rename(
         &mut self,
@@ -601,8 +621,10 @@ impl Filesystem for SFS {
         _newparent: u64,
         _newname: &OsStr,
         _flags: u32,
-        _reply: ReplyEmpty,
+        reply: ReplyEmpty,
     ) {
+
+        reply.error(libc::ENOSYS);
     }
     fn create(
         &mut self,
@@ -612,8 +634,10 @@ impl Filesystem for SFS {
         _mode: u32,
         _umask: u32,
         _flags: i32,
-        _reply: fuser::ReplyCreate,
+        reply: fuser::ReplyCreate,
     ) {
+
+        reply.error(libc::ENOSYS);
     }
     fn destroy(&mut self) {}
     fn symlink(
@@ -622,8 +646,10 @@ impl Filesystem for SFS {
         _parent: u64,
         _name: &OsStr,
         _link: &std::path::Path,
-        _reply: ReplyEntry,
+        reply: ReplyEntry,
     ) {
+
+        reply.error(libc::ENOSYS);
     }
     fn release(
         &mut self,
@@ -636,7 +662,9 @@ impl Filesystem for SFS {
         _reply: ReplyEmpty,
     ) {
     }
-    fn opendir(&mut self, _req: &Request<'_>, _ino: u64, _flags: i32, _reply: fuser::ReplyOpen) {}
+    fn opendir(&mut self, _req: &Request<'_>, _ino: u64, _flags: i32, reply: fuser::ReplyOpen) {
+        reply.error(libc::ENOSYS);
+    }
     fn readlink(&mut self, _req: &Request<'_>, _ino: u64, _reply: fuser::ReplyData) {}
     fn fsyncdir(
         &mut self,
@@ -717,8 +745,10 @@ impl Filesystem for SFS {
         _offset: i64,
         _length: i64,
         _mode: i32,
-        _reply: ReplyEmpty,
+        reply: ReplyEmpty,
     ) {
+
+        reply.error(libc::ENOSYS);
     }
     fn releasedir(
         &mut self,
@@ -726,8 +756,10 @@ impl Filesystem for SFS {
         _ino: u64,
         _fh: u64,
         _flags: i32,
-        _reply: ReplyEmpty,
+        reply: ReplyEmpty,
     ) {
+
+        reply.error(libc::ENOSYS);
     }
     fn readdirplus(
         &mut self,
@@ -735,8 +767,10 @@ impl Filesystem for SFS {
         _ino: u64,
         _fh: u64,
         _offset: i64,
-        _reply: fuser::ReplyDirectoryPlus,
+        reply: fuser::ReplyDirectoryPlus,
     ) {
+
+        reply.error(libc::ENOSYS);
     }
     fn removexattr(&mut self, _req: &Request<'_>, ino: u64, name: &OsStr, reply: ReplyEmpty) {
         if let Some(mut inode) = self.read_inode(ino) {
@@ -760,7 +794,9 @@ impl Filesystem for SFS {
         _offset_out: i64,
         _len: u64,
         _flags: u32,
-        _reply: fuser::ReplyWrite,
+        reply: fuser::ReplyWrite,
     ) {
+
+        reply.error(libc::ENOSYS);
     }
 }
