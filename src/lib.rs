@@ -299,31 +299,33 @@ impl Filesystem for SFS {
         _rdev: u32,
         reply: ReplyEntry,
     ) {
-        let file_type = mode & libc::S_IFMT as u32;
+        let kind = match mode & libc::S_IFMT {
+            libc::S_IFREG => FileType::RegularFile,
+            libc::S_IFCHR | libc::S_IFBLK | libc::S_IFIFO | libc::S_IFSOCK => {
+                reply.error(libc::ENOSYS);
+                return;
+            }
+            _ => {
+                reply.error(libc::EINVAL);
+                return;
+            }
+        };
         if let Ok(mut parent) = self.read_inode(parent) {
             if parent.attrs.kind != FileType::Directory {
                 reply.error(libc::EACCES);
                 return;
             }
-            let mut new_inode = self.new_inode(req);
-            new_inode.attrs.perm = (mode & !umask) as u16;
             if parent.attrs.entries.contains_key(name.to_str().unwrap()) {
                 reply.error(libc::EEXIST);
                 return;
             }
+            let mut new_inode = self.new_inode(req);
+            new_inode.attrs.perm = (mode & !umask) as u16;
             parent.attrs.entries.insert(
                 name.to_str().unwrap().to_string(),
                 DirEntry {
                     ino: new_inode.attrs.ino,
-                    kind: match file_type {
-                        libc::S_IFREG => FileType::RegularFile,
-                        libc::S_IFLNK => FileType::Symlink,
-                        libc::S_IFDIR => FileType::Directory,
-                        _ => {
-                            reply.error(libc::ENOSYS);
-                            return;
-                        }
-                    },
+                    kind,
                 },
             );
             reply.entry(&Duration::new(0, 0), &new_inode.into(), 0);
