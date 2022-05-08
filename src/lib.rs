@@ -251,6 +251,14 @@ impl Filesystem for SFS {
         );
     }
 
+    fn access(&mut self, _req: &Request, ino: u64, _mask: i32, reply: ReplyEmpty) {
+        if self.read_inode(ino).is_ok() {
+            reply.ok();
+        } else {
+            reply.error(libc::EACCES)
+        }
+    }
+
     fn setattr(
         &mut self,
         _req: &Request<'_>,
