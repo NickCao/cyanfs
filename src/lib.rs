@@ -520,8 +520,16 @@ impl Filesystem for SFS {
             reply.error(libc::EBADF);
         }
     }
-    fn rmdir(&mut self, _req: &Request<'_>, _parent: u64, _name: &OsStr, reply: ReplyEmpty) {
-        reply.error(libc::ENOSYS);
+    fn rmdir(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
+        if let Some(mut inode) = self.read_inode(parent) {
+            if inode.inner.entries.remove(name.to_str().unwrap()).is_some() {
+                reply.ok();
+            } else {
+                reply.error(libc::ENOENT);
+            }
+        } else {
+            reply.error(libc::EBADF);
+        }
     }
     fn fsync(
         &mut self,
@@ -545,14 +553,27 @@ impl Filesystem for SFS {
     fn rename(
         &mut self,
         _req: &Request<'_>,
-        _parent: u64,
-        _name: &OsStr,
-        _newparent: u64,
-        _newname: &OsStr,
+        parent: u64,
+        name: &OsStr,
+        newparent: u64,
+        newname: &OsStr,
         _flags: u32,
         reply: ReplyEmpty,
     ) {
-        reply.error(libc::ENOSYS);
+        let inode = self.lookup_dirent(parent, name).unwrap();
+        if let Some(mut newparent) = self.read_inode(newparent) {
+            newparent.inner.entries.insert(
+                newname.to_str().unwrap().to_string(),
+                DirEntry {
+                    ino: inode.inner.ino,
+                    kind: inode.inner.kind,
+                },
+            );
+            self.remove_dirent(parent, name).unwrap();
+            reply.ok();
+        } else {
+            reply.error(libc::EACCES);
+        }
     }
     fn symlink(
         &mut self,
