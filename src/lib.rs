@@ -726,16 +726,6 @@ impl Filesystem for SFS {
     ) {
         reply.error(libc::ENOSYS);
     }
-    fn releasedir(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        _fh: u64,
-        _flags: i32,
-        reply: ReplyEmpty,
-    ) {
-        reply.error(libc::ENOSYS);
-    }
     fn readdirplus(
         &mut self,
         _req: &Request<'_>,
