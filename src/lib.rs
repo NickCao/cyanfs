@@ -566,18 +566,6 @@ impl Filesystem for SFS {
     ) {
         reply.error(libc::ENOSYS);
     }
-    fn create(
-        &mut self,
-        _req: &Request<'_>,
-        _parent: u64,
-        _name: &OsStr,
-        _mode: u32,
-        _umask: u32,
-        _flags: i32,
-        reply: fuser::ReplyCreate,
-    ) {
-        reply.error(libc::ENOSYS);
-    }
     fn symlink(
         &mut self,
         _req: &Request<'_>,
