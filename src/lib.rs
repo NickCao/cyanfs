@@ -535,16 +535,6 @@ impl Filesystem for SFS {
     fn rmdir(&mut self, _req: &Request<'_>, _parent: u64, _name: &OsStr, reply: ReplyEmpty) {
         reply.error(libc::ENOSYS);
     }
-    fn flush(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        _fh: u64,
-        _lock_owner: u64,
-        reply: ReplyEmpty,
-    ) {
-        reply.error(libc::ENOSYS);
-    }
     fn fsync(
         &mut self,
         _req: &Request<'_>,
