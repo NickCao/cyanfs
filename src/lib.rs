@@ -533,15 +533,19 @@ impl Filesystem for SFS {
     ) {
         reply.error(libc::ENOSYS);
     }
-    fn fsync(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        _fh: u64,
-        _datasync: bool,
-        reply: ReplyEmpty,
-    ) {
-        reply.error(libc::ENOSYS);
+    fn fsync(&mut self, _req: &Request<'_>, ino: u64, _fh: u64, datasync: bool, reply: ReplyEmpty) {
+        if let Some(inode) = self.read_inode(ino) {
+            if datasync {
+                inode
+                    .inner
+                    .blocks
+                    .iter()
+                    .for_each(|&block| self.dev.lock().unwrap().flush_block(block));
+            }
+            reply.ok();
+        } else {
+            reply.error(libc::EBADF);
+        }
     }
     fn getlk(
         &mut self,
