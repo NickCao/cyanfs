@@ -240,7 +240,8 @@ impl SFS {
 }
 
 impl Filesystem for SFS {
-    fn init(&mut self, _req: &Request, _config: &mut KernelConfig) -> Result<(), c_int> {
+    fn init(&mut self, _req: &Request, config: &mut KernelConfig) -> Result<(), c_int> {
+        simple_logger::SimpleLogger::new().init().unwrap();
         if self.read_inode(FUSE_ROOT_ID).is_none() {
             let mut root = self.new_inode();
             root.inner.kind = FileKind::Directory;
@@ -276,7 +277,6 @@ impl Filesystem for SFS {
         _lock_owner: Option<u64>,
         reply: fuser::ReplyData,
     ) {
-        println!("read");
         assert!(offset >= 0);
         if let Some(inode) = self.read_inode(ino) {
             let mut buf = vec![0u8; size as usize];
@@ -299,7 +299,6 @@ impl Filesystem for SFS {
         _lock_owner: Option<u64>,
         reply: fuser::ReplyWrite,
     ) {
-        println!("write");
         assert!(offset >= 0);
         if let Some(mut inode) = self.read_inode(ino) {
             let new_size = offset as usize + data.len();
@@ -318,7 +317,6 @@ impl Filesystem for SFS {
     }
 
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
-        println!("getattr");
         if let Some(inode) = self.read_inode(ino) {
             reply.attr(&Duration::new(0, 0), &inode.into());
         } else {
@@ -334,7 +332,6 @@ impl Filesystem for SFS {
         offset: i64,
         mut reply: ReplyDirectory,
     ) {
-        println!("readdir");
         assert!(offset >= 0);
         if let Some(inode) = self.read_inode(ino) {
             for (index, (name, entry)) in
@@ -358,7 +355,6 @@ impl Filesystem for SFS {
     }
 
     fn statfs(&mut self, _req: &Request, _ino: u64, reply: ReplyStatfs) {
-        println!("statfs");
         reply.statfs(
             u64::MAX,
             u64::MAX,
@@ -372,7 +368,6 @@ impl Filesystem for SFS {
     }
 
     fn access(&mut self, _req: &Request, ino: u64, _mask: i32, reply: ReplyEmpty) {
-        println!("access");
         if self.read_inode(ino).is_some() {
             reply.ok();
         } else {
@@ -398,7 +393,6 @@ impl Filesystem for SFS {
         _flags: Option<u32>,
         reply: ReplyAttr,
     ) {
-        println!("setattr");
         if let Some(mut inode) = self.read_inode(ino) {
             if let Some(size) = size {
                 inode.inner.size = size;
@@ -421,7 +415,6 @@ impl Filesystem for SFS {
         _rdev: u32,
         reply: ReplyEntry,
     ) {
-        println!("mknod");
         let file_type = mode & libc::S_IFMT as u32;
         if let Some(mut parent) = self.read_inode(parent) {
             if parent.inner.kind != FileKind::Directory {
@@ -454,7 +447,6 @@ impl Filesystem for SFS {
         };
     }
     fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
-        print!("unlink");
         if let Some(mut inode) = self.read_inode(parent) {
             if inode.inner.entries.remove(name.to_str().unwrap()).is_some() {
                 reply.ok();
@@ -466,7 +458,6 @@ impl Filesystem for SFS {
         }
     }
     fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        print!("lookup");
         if let Some(entry) = self.lookup_dirent(parent, name) {
             reply.entry(&Duration::new(0, 0), &entry.into(), 0);
         } else {
@@ -482,7 +473,6 @@ impl Filesystem for SFS {
         _umask: u32,
         reply: ReplyEntry,
     ) {
-        println!("mkdir");
         if let Some(mut parent) = self.read_inode(parent) {
             if parent.inner.kind != FileKind::Directory {
                 reply.error(libc::EACCES);
@@ -572,7 +562,6 @@ impl Filesystem for SFS {
         link: &std::path::Path,
         reply: ReplyEntry,
     ) {
-        println!("symlink");
         if let Some(mut parent) = self.read_inode(parent) {
             if parent.inner.kind != FileKind::Directory {
                 reply.error(libc::EACCES);
@@ -593,7 +582,6 @@ impl Filesystem for SFS {
                 },
             );
             reply.entry(&Duration::new(0, 0), &new_inode.into(), 0);
-            println!("success");
         } else {
             reply.error(libc::EBADF);
         };
@@ -614,16 +602,6 @@ impl Filesystem for SFS {
         _length: i64,
         _mode: i32,
         reply: ReplyEmpty,
-    ) {
-        reply.error(libc::ENOSYS);
-    }
-    fn readdirplus(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        _fh: u64,
-        _offset: i64,
-        reply: fuser::ReplyDirectoryPlus,
     ) {
         reply.error(libc::ENOSYS);
     }
