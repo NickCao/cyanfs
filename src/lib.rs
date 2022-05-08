@@ -547,35 +547,6 @@ impl Filesystem for SFS {
             reply.error(libc::EBADF);
         }
     }
-    fn getlk(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        _fh: u64,
-        _lock_owner: u64,
-        _start: u64,
-        _end: u64,
-        _typ: i32,
-        _pid: u32,
-        reply: fuser::ReplyLock,
-    ) {
-        reply.error(libc::ENOSYS);
-    }
-    fn setlk(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        _fh: u64,
-        _lock_owner: u64,
-        _start: u64,
-        _end: u64,
-        _typ: i32,
-        _pid: u32,
-        _sleep: bool,
-        reply: ReplyEmpty,
-    ) {
-        reply.error(libc::ENOSYS);
-    }
     fn ioctl(
         &mut self,
         _req: &Request<'_>,
