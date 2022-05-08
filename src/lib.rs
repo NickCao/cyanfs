@@ -95,6 +95,7 @@ pub struct InodeInner {
     pub size: u64,
     pub kind: FileKind,
     pub perm: u16,
+    pub nlinks: u64,
     pub xattrs: HashMap<String, Vec<u8>>,
     pub entries: HashMap<String, DirEntry>,
     pub blocks: Vec<usize>,
@@ -178,6 +179,7 @@ impl SFS {
                 size: 0,
                 kind: FileKind::File,
                 perm: 0o777,
+                nlinks: 1,
                 entries: HashMap::new(),
                 xattrs: HashMap::new(),
                 blocks: vec![],
@@ -447,10 +449,14 @@ impl Filesystem for SFS {
     }
     fn unlink(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEmpty) {
         print!("unlink");
-        if let Some(_entry) = self.remove_dirent(parent, name) {
-            reply.ok();
+        if let Some(mut inode) = self.read_inode(parent) {
+            if inode.inner.entries.remove(name.to_str().unwrap()).is_some() {
+                reply.ok();
+            } else {
+                reply.error(libc::ENOENT);
+            }
         } else {
-            reply.error(libc::ENOENT);
+            reply.error(libc::EBADF);
         }
     }
     fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
@@ -497,12 +503,26 @@ impl Filesystem for SFS {
     fn link(
         &mut self,
         _req: &Request<'_>,
-        _ino: u64,
-        _newparent: u64,
-        _newname: &OsStr,
+        ino: u64,
+        newparent: u64,
+        newname: &OsStr,
         reply: ReplyEntry,
     ) {
-        reply.error(libc::ENOSYS);
+        if let Some(mut inode) = self.read_inode(ino) {
+            if let Some(mut parent) = self.read_inode(newparent) {
+                parent.inner.entries.insert(
+                    newname.to_str().unwrap().to_string(),
+                    DirEntry {
+                        ino: inode.inner.ino,
+                        kind: inode.inner.kind,
+                    },
+                );
+                inode.inner.nlinks += 1;
+                reply.entry(&Duration::new(0, 0), &inode.into(), 0);
+            }
+        } else {
+            reply.error(libc::EBADF);
+        }
     }
     fn rmdir(&mut self, _req: &Request<'_>, _parent: u64, _name: &OsStr, reply: ReplyEmpty) {
         reply.error(libc::ENOSYS);
