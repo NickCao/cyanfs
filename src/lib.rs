@@ -47,7 +47,7 @@ impl SFS {
         self.next_inode += 1;
         inode
     }
-    pub fn new_inode(&mut self) -> Inode {
+    pub fn new_inode(&mut self, req: &Request<'_>) -> Inode {
         let now = SystemTime::now();
         Inode {
             attrs: Attrs {
@@ -61,8 +61,8 @@ impl SFS {
                 kind: FileType::RegularFile,
                 perm: 0o777,
                 nlink: 1,
-                uid: 0,
-                gid: 0,
+                uid: req.uid(),
+                gid: req.gid(),
                 rdev: 0,
                 flags: 0,
                 link: std::path::PathBuf::new(),
@@ -124,10 +124,10 @@ impl SFS {
 }
 
 impl Filesystem for SFS {
-    fn init(&mut self, _req: &Request, _config: &mut KernelConfig) -> Result<(), c_int> {
+    fn init(&mut self, req: &Request, _config: &mut KernelConfig) -> Result<(), c_int> {
         simple_logger::SimpleLogger::new().init().unwrap();
         if self.read_inode(FUSE_ROOT_ID).is_err() {
-            let mut root = self.new_inode();
+            let mut root = self.new_inode(req);
             root.attrs.kind = FileType::Directory;
         }
         let it = self.db.iterator(rocksdb::IteratorMode::Start);
@@ -291,7 +291,7 @@ impl Filesystem for SFS {
     }
     fn mknod(
         &mut self,
-        _req: &Request<'_>,
+        req: &Request<'_>,
         parent: u64,
         name: &OsStr,
         mode: u32,
@@ -305,7 +305,7 @@ impl Filesystem for SFS {
                 reply.error(libc::EACCES);
                 return;
             }
-            let new_inode = self.new_inode();
+            let new_inode = self.new_inode(req);
             if parent.attrs.entries.contains_key(name.to_str().unwrap()) {
                 reply.error(libc::EEXIST);
                 return;
@@ -350,7 +350,7 @@ impl Filesystem for SFS {
     }
     fn mkdir(
         &mut self,
-        _req: &Request<'_>,
+        req: &Request<'_>,
         parent: u64,
         name: &OsStr,
         _mode: u32,
@@ -362,7 +362,7 @@ impl Filesystem for SFS {
                 reply.error(libc::EACCES);
                 return;
             }
-            let mut new_inode = self.new_inode();
+            let mut new_inode = self.new_inode(req);
             new_inode.attrs.kind = FileType::Directory;
             if parent.attrs.entries.contains_key(name.to_str().unwrap()) {
                 reply.error(libc::EEXIST);
@@ -461,7 +461,7 @@ impl Filesystem for SFS {
     }
     fn symlink(
         &mut self,
-        _req: &Request<'_>,
+        req: &Request<'_>,
         parent: u64,
         name: &OsStr,
         link: &std::path::Path,
@@ -472,7 +472,7 @@ impl Filesystem for SFS {
                 reply.error(libc::EACCES);
                 return;
             }
-            let mut new_inode = self.new_inode();
+            let mut new_inode = self.new_inode(req);
             new_inode.attrs.kind = FileType::Symlink;
             new_inode.attrs.link = link.to_path_buf();
             if parent.attrs.entries.contains_key(name.to_str().unwrap()) {
