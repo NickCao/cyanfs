@@ -18,6 +18,7 @@ pub enum FileType {
 }
 
 pub struct Inode {
+    pub oldattrs: Attrs,
     pub attrs: Attrs,
     pub db: Arc<DB>,
     pub dev: Arc<Mutex<BlockCache<BLOCK_SIZE, CACHE_SIZE>>>,
@@ -30,8 +31,10 @@ impl Inode {
         ino: u64,
     ) -> Result<Self, c_int> {
         if let Some(inner) = db.get(ino.to_le_bytes()).map_err(|_| libc::EIO)? {
+            let attrs: Attrs = bincode::deserialize(&inner).map_err(|_| libc::EBADF)?;
             Ok(Inode {
-                attrs: bincode::deserialize(&inner).map_err(|_| libc::EBADF)?,
+                oldattrs: attrs.clone(),
+                attrs,
                 db,
                 dev,
             })
@@ -43,15 +46,17 @@ impl Inode {
 
 impl Drop for Inode {
     fn drop(&mut self) {
-        if self.attrs.nlink != 0 {
-            self.db
-                .put(
-                    self.attrs.ino.to_le_bytes(),
-                    &bincode::serialize(&self.attrs).unwrap(),
-                )
-                .unwrap();
-        } else {
-            self.db.delete(self.attrs.ino.to_le_bytes()).unwrap();
+        if self.oldattrs != self.attrs {
+            if self.attrs.nlink != 0 {
+                self.db
+                    .put(
+                        self.attrs.ino.to_le_bytes(),
+                        &bincode::serialize(&self.attrs).unwrap(),
+                    )
+                    .unwrap();
+            } else {
+                self.db.delete(self.attrs.ino.to_le_bytes()).unwrap();
+            }
         }
     }
 }
@@ -122,7 +127,7 @@ impl FileExt for Inode {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, PartialEq, Clone)]
 pub struct Attrs {
     pub ino: u64,
     pub size: u64,
@@ -142,7 +147,7 @@ pub struct Attrs {
     pub link: std::path::PathBuf,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
 pub struct DirEntry {
     pub ino: u64,
     pub kind: FileType,

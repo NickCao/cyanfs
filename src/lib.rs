@@ -64,28 +64,32 @@ impl SFS {
     }
     pub fn new_inode(&mut self, req: &Request<'_>, ino: Option<u64>) -> Inode {
         let now = SystemTime::now();
-        Inode {
-            attrs: Attrs {
-                ino: match ino {
-                    Some(ino) => ino,
-                    None => self.alloc_inode() as u64,
-                },
-                size: 0,
-                blocks: vec![],
-                atime: now,
-                mtime: now,
-                ctime: now,
-                crtime: now,
-                kind: FileType::RegularFile,
-                perm: 0o777,
-                nlink: 1,
-                uid: req.uid(),
-                gid: req.gid(),
-                rdev: 0,
-                flags: 0,
-                link: std::path::PathBuf::new(),
-                entries: HashMap::new(),
+        let attrs = Attrs {
+            ino: match ino {
+                Some(ino) => ino,
+                None => self.alloc_inode() as u64,
             },
+            size: 0,
+            blocks: vec![],
+            atime: now,
+            mtime: now,
+            ctime: now,
+            crtime: now,
+            kind: FileType::RegularFile,
+            perm: 0o777,
+            nlink: 1,
+            uid: req.uid(),
+            gid: req.gid(),
+            rdev: 0,
+            flags: 0,
+            link: std::path::PathBuf::new(),
+            entries: HashMap::new(),
+        };
+        let mut oldattrs = attrs.clone();
+        oldattrs.ino = 0;
+        Inode {
+            oldattrs,
+            attrs,
             db: self.db.clone(),
             dev: self.dev.clone(),
         }
