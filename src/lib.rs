@@ -20,6 +20,7 @@ pub mod block_cache;
 pub mod block_dev;
 
 const BLOCK_SIZE: usize = 512;
+const CACHE_SIZE: usize = 512;
 
 #[derive(Serialize, Deserialize, Copy, Clone, PartialEq)]
 pub enum FileKind {
@@ -31,7 +32,7 @@ pub enum FileKind {
 pub struct Inode {
     pub inner: InodeInner,
     pub db: Arc<DB>,
-    pub dev: Arc<Mutex<BlockCache<BLOCK_SIZE, 20>>>,
+    pub dev: Arc<Mutex<BlockCache<BLOCK_SIZE, CACHE_SIZE>>>,
 }
 
 impl Drop for Inode {
@@ -141,7 +142,7 @@ impl From<Inode> for fuser::FileAttr {
 
 pub struct SFS {
     db: Arc<DB>,
-    dev: Arc<Mutex<block_cache::BlockCache<BLOCK_SIZE, 20>>>,
+    dev: Arc<Mutex<block_cache::BlockCache<BLOCK_SIZE, CACHE_SIZE>>>,
     next_inode: usize,
     next_block: usize,
 }
@@ -240,7 +241,7 @@ impl SFS {
 }
 
 impl Filesystem for SFS {
-    fn init(&mut self, _req: &Request, config: &mut KernelConfig) -> Result<(), c_int> {
+    fn init(&mut self, _req: &Request, _config: &mut KernelConfig) -> Result<(), c_int> {
         simple_logger::SimpleLogger::new().init().unwrap();
         if self.read_inode(FUSE_ROOT_ID).is_none() {
             let mut root = self.new_inode();
