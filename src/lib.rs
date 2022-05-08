@@ -95,6 +95,7 @@ pub struct InodeInner {
     pub size: u64,
     pub kind: FileKind,
     pub perm: u16,
+    pub xattrs: HashMap<String, Vec<u8>>,
     pub blocks: Vec<usize>,
 }
 
@@ -156,10 +157,10 @@ impl SFS {
     }
     pub fn read_inode(&self, ino: u64) -> Option<Inode> {
         self.db.get(ino.to_ne_bytes()).unwrap().map(|value| Inode {
-                inner: bincode::deserialize(&value).unwrap(),
-                db: self.db.clone(),
-                dev: self.dev.clone(),
-            })
+            inner: bincode::deserialize(&value).unwrap(),
+            db: self.db.clone(),
+            dev: self.dev.clone(),
+        })
     }
     pub fn alloc_block(&mut self) -> usize {
         let block = self.next_block;
@@ -178,6 +179,7 @@ impl SFS {
                 size: 0,
                 kind: FileKind::File,
                 perm: 0o777,
+                xattrs: HashMap::new(),
                 blocks: vec![],
             },
             db: self.db.clone(),
@@ -202,7 +204,9 @@ impl SFS {
         if let Some(inode) = self.read_inode(parent) {
             let data = self.read_data(&inode);
             let entries: Directory = bincode::deserialize(&data).unwrap();
-            entries.get(name.to_str().unwrap()).map(|entry| self.read_inode(entry.ino).unwrap())
+            entries
+                .get(name.to_str().unwrap())
+                .map(|entry| self.read_inode(entry.ino).unwrap())
         } else {
             None
         }
@@ -521,9 +525,24 @@ impl Filesystem for SFS {
         _reply: fuser::ReplyBmap,
     ) {
     }
-    fn flush(&mut self, _req: &Request<'_>, _ino: u64, _fh: u64, _lock_owner: u64, _reply: ReplyEmpty) {
+    fn flush(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _fh: u64,
+        _lock_owner: u64,
+        _reply: ReplyEmpty,
+    ) {
     }
-    fn fsync(&mut self, _req: &Request<'_>, _ino: u64, _fh: u64, _datasync: bool, _reply: ReplyEmpty) {}
+    fn fsync(
+        &mut self,
+        _req: &Request<'_>,
+        _ino: u64,
+        _fh: u64,
+        _datasync: bool,
+        _reply: ReplyEmpty,
+    ) {
+    }
     fn getlk(
         &mut self,
         _req: &Request<'_>,
@@ -678,7 +697,17 @@ impl Filesystem for SFS {
         _reply: fuser::ReplyDirectoryPlus,
     ) {
     }
-    fn removexattr(&mut self, _req: &Request<'_>, _ino: u64, _name: &OsStr, _reply: ReplyEmpty) {}
+    fn removexattr(&mut self, _req: &Request<'_>, ino: u64, name: &OsStr, reply: ReplyEmpty) {
+        if let Some(mut inode) = self.read_inode(ino) {
+            if inode.inner.xattrs.remove(name.to_str().unwrap()).is_some() {
+                reply.ok();
+            } else {
+                reply.error(libc::ENOENT);
+            }
+        } else {
+            reply.error(libc::ENOENT);
+        }
+    }
     fn copy_file_range(
         &mut self,
         _req: &Request<'_>,
