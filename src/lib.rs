@@ -633,18 +633,6 @@ impl Filesystem for SFS {
             reply.error(libc::EBADF);
         };
     }
-    fn release(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        _fh: u64,
-        _flags: i32,
-        _lock_owner: Option<u64>,
-        _flush: bool,
-        reply: ReplyEmpty,
-    ) {
-        reply.error(libc::ENOSYS);
-    }
     fn readlink(&mut self, _req: &Request<'_>, ino: u64, reply: fuser::ReplyData) {
         if let Some(inode) = self.read_inode(ino) {
             reply.data(&inode.inner.link.as_os_str().as_bytes());
