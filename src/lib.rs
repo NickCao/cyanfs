@@ -49,7 +49,8 @@ impl FileExt for Inode {
         let mut data = vec![];
         for block in &self.inner.blocks {
             let mut buf = [0u8; BLOCK_SIZE];
-            self.dev.lock()
+            self.dev
+                .lock()
                 .unwrap()
                 .read_block(*block, &mut buf)
                 .unwrap();
@@ -60,7 +61,30 @@ impl FileExt for Inode {
         Ok(size)
     }
     fn write_at(&self, buf: &[u8], offset: u64) -> std::io::Result<usize> {
-        Ok(0)
+        let mut data = vec![];
+        for block in &self.inner.blocks {
+            let mut buf = [0u8; BLOCK_SIZE];
+            self.dev
+                .lock()
+                .unwrap()
+                .read_block(*block, &mut buf)
+                .unwrap();
+            data.extend_from_slice(&buf);
+        }
+        data[offset as usize..offset as usize + buf.len()].copy_from_slice(buf);
+        for (i, block) in self.inner.blocks.iter().enumerate() {
+            self.dev
+                .lock()
+                .unwrap()
+                .write_block(
+                    *block,
+                    data[i * BLOCK_SIZE..(i + 1) * BLOCK_SIZE]
+                        .try_into()
+                        .unwrap(),
+                )
+                .unwrap();
+        }
+        Ok(buf.len())
     }
 }
 
@@ -169,10 +193,7 @@ impl SFS {
             let mut buf = [0u8; BLOCK_SIZE];
             buf[..chunk.len()].copy_from_slice(chunk);
             let block = self.alloc_block();
-            self.dev
-                .lock().unwrap()
-                .write_block(block, &buf)
-                .unwrap();
+            self.dev.lock().unwrap().write_block(block, &buf).unwrap();
             new_blocks.push(block);
         }
         inode.inner.size = data.len() as u64;
@@ -182,7 +203,8 @@ impl SFS {
         let mut data = vec![];
         for block in &inode.inner.blocks {
             let mut buf = [0u8; BLOCK_SIZE];
-            self.dev.lock()
+            self.dev
+                .lock()
                 .unwrap()
                 .read_block(*block, &mut buf)
                 .unwrap();
@@ -261,14 +283,16 @@ impl Filesystem for SFS {
         println!("write");
         assert!(offset >= 0);
         if let Some(mut inode) = self.read_inode(ino) {
-            let block = self.alloc_block();
-            inode.inner.blocks.push(block);
-            inode.inner.size = BLOCK_SIZE as u64;
-            self.dev.lock()
-                .unwrap()
-                .write_block(block, &[65u8; BLOCK_SIZE])
-                .unwrap();
-            reply.written(data.len() as u32);
+            let new_size = offset as usize + data.len();
+            if new_size > inode.inner.size as usize {
+                inode.inner.size = new_size as u64;
+            }
+            let block_cnt = (new_size + (BLOCK_SIZE - 1)) / BLOCK_SIZE;
+            while block_cnt > inode.inner.blocks.len() {
+                inode.inner.blocks.push(self.alloc_block());
+            }
+            let size = inode.write_at(data, offset as u64).unwrap();
+            reply.written(size as u32);
         } else {
             reply.error(libc::ENOENT);
         }
