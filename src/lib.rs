@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::ffi::OsStr;
 
+use std::hash::Hash;
 use std::os::raw::c_int;
 
 use std::os::unix::prelude::{FileExt, OsStrExt};
@@ -89,20 +90,19 @@ impl FileExt for Inode {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize)]
 pub struct InodeInner {
     pub ino: u64,
     pub size: u64,
     pub kind: FileKind,
     pub perm: u16,
     pub xattrs: HashMap<String, Vec<u8>>,
+    pub entries: HashMap<String, DirEntry>,
     pub blocks: Vec<usize>,
 }
 
-type Directory = HashMap<String, DirEntry>;
-
 #[derive(Serialize, Deserialize)]
-struct DirEntry {
+pub struct DirEntry {
     pub ino: u64,
     pub kind: FileKind,
 }
@@ -179,6 +179,7 @@ impl SFS {
                 size: 0,
                 kind: FileKind::File,
                 perm: 0o777,
+                entries: HashMap::new(),
                 xattrs: HashMap::new(),
                 blocks: vec![],
             },
@@ -188,10 +189,7 @@ impl SFS {
     }
     pub fn remove_dirent(&mut self, parent: u64, name: &OsStr) -> Option<()> {
         if let Some(mut inode) = self.read_inode(parent) {
-            let data = self.read_data(&inode);
-            let mut entries: Directory = bincode::deserialize(&data).unwrap();
-            if let Some(_entry) = entries.remove(name.to_str().unwrap()) {
-                self.replace_data(&mut inode, &bincode::serialize(&entries).unwrap());
+            if let Some(_entry) = inode.inner.entries.remove(name.to_str().unwrap()) {
                 Some(())
             } else {
                 None
@@ -202,9 +200,9 @@ impl SFS {
     }
     pub fn lookup_dirent(&mut self, parent: u64, name: &OsStr) -> Option<Inode> {
         if let Some(inode) = self.read_inode(parent) {
-            let data = self.read_data(&inode);
-            let entries: Directory = bincode::deserialize(&data).unwrap();
-            entries
+            inode
+                .inner
+                .entries
                 .get(name.to_str().unwrap())
                 .map(|entry| self.read_inode(entry.ino).unwrap())
         } else {
@@ -246,7 +244,6 @@ impl Filesystem for SFS {
         if self.read_inode(FUSE_ROOT_ID).is_none() {
             let mut root = self.new_inode();
             root.inner.kind = FileKind::Directory;
-            self.replace_data(&mut root, &bincode::serialize(&Directory::new()).unwrap())
         }
         let it = self.db.iterator(rocksdb::IteratorMode::Start);
         for (_k, v) in it {
@@ -342,9 +339,9 @@ impl Filesystem for SFS {
         println!("readdir");
         assert!(offset >= 0);
         if let Some(inode) = self.read_inode(ino) {
-            let data = self.read_data(&inode);
-            let entries: Directory = bincode::deserialize(&data).unwrap();
-            for (index, (name, entry)) in entries.iter().skip(offset as usize).enumerate() {
+            for (index, (name, entry)) in
+                inode.inner.entries.iter().skip(offset as usize).enumerate()
+            {
                 let buffer_full: bool = reply.add(
                     entry.ino,
                     offset + index as i64 + 1,
@@ -432,20 +429,18 @@ impl Filesystem for SFS {
                 reply.error(libc::EACCES);
                 return;
             }
-            let mut entries: Directory = bincode::deserialize(&self.read_data(&parent)).unwrap();
             let new_inode = self.new_inode();
-            if entries.contains_key(name.to_str().unwrap()) {
+            if parent.inner.entries.contains_key(name.to_str().unwrap()) {
                 reply.error(libc::EEXIST);
                 return;
             }
-            entries.insert(
+            parent.inner.entries.insert(
                 name.to_str().unwrap().to_string(),
                 DirEntry {
                     ino: new_inode.inner.ino,
                     kind: FileKind::File,
                 },
             );
-            self.replace_data(&mut parent, &bincode::serialize(&entries).unwrap());
             reply.entry(&Duration::new(0, 0), &new_inode.into(), 0);
         } else {
             reply.error(libc::EACCES);
@@ -482,25 +477,19 @@ impl Filesystem for SFS {
                 reply.error(libc::EACCES);
                 return;
             }
-            let mut entries: Directory = bincode::deserialize(&self.read_data(&parent)).unwrap();
             let mut new_inode = self.new_inode();
             new_inode.inner.kind = FileKind::Directory;
-            self.replace_data(
-                &mut new_inode,
-                &bincode::serialize(&Directory::new()).unwrap(),
-            );
-            if entries.contains_key(name.to_str().unwrap()) {
+            if parent.inner.entries.contains_key(name.to_str().unwrap()) {
                 reply.error(libc::EEXIST);
                 return;
             }
-            entries.insert(
+            parent.inner.entries.insert(
                 name.to_str().unwrap().to_string(),
                 DirEntry {
                     ino: new_inode.inner.ino,
                     kind: FileKind::Directory,
                 },
             );
-            self.replace_data(&mut parent, &bincode::serialize(&entries).unwrap());
             reply.entry(&Duration::new(0, 0), &new_inode.into(), 0);
         } else {
             reply.error(libc::EACCES);
@@ -514,11 +503,9 @@ impl Filesystem for SFS {
         _newname: &OsStr,
         reply: ReplyEntry,
     ) {
-
         reply.error(libc::ENOSYS);
     }
     fn rmdir(&mut self, _req: &Request<'_>, _parent: u64, _name: &OsStr, reply: ReplyEmpty) {
-
         reply.error(libc::ENOSYS);
     }
     fn bmap(
@@ -529,7 +516,6 @@ impl Filesystem for SFS {
         _idx: u64,
         reply: fuser::ReplyBmap,
     ) {
-
         reply.error(libc::ENOSYS);
     }
     fn flush(
@@ -540,7 +526,6 @@ impl Filesystem for SFS {
         _lock_owner: u64,
         reply: ReplyEmpty,
     ) {
-
         reply.error(libc::ENOSYS);
     }
     fn fsync(
@@ -551,7 +536,6 @@ impl Filesystem for SFS {
         _datasync: bool,
         reply: ReplyEmpty,
     ) {
-
         reply.error(libc::ENOSYS);
     }
     fn getlk(
@@ -566,7 +550,6 @@ impl Filesystem for SFS {
         _pid: u32,
         reply: fuser::ReplyLock,
     ) {
-
         reply.error(libc::ENOSYS);
     }
     fn setlk(
@@ -582,7 +565,6 @@ impl Filesystem for SFS {
         _sleep: bool,
         reply: ReplyEmpty,
     ) {
-
         reply.error(libc::ENOSYS);
     }
     fn ioctl(
@@ -596,11 +578,9 @@ impl Filesystem for SFS {
         _out_size: u32,
         reply: fuser::ReplyIoctl,
     ) {
-
         reply.error(libc::ENOSYS);
     }
-    fn forget(&mut self, _req: &Request<'_>, _ino: u64, _nlookup: u64) {
-    }
+    fn forget(&mut self, _req: &Request<'_>, _ino: u64, _nlookup: u64) {}
     fn lseek(
         &mut self,
         _req: &Request<'_>,
@@ -610,7 +590,6 @@ impl Filesystem for SFS {
         _whence: i32,
         reply: fuser::ReplyLseek,
     ) {
-
         reply.error(libc::ENOSYS);
     }
     fn rename(
@@ -623,7 +602,6 @@ impl Filesystem for SFS {
         _flags: u32,
         reply: ReplyEmpty,
     ) {
-
         reply.error(libc::ENOSYS);
     }
     fn create(
@@ -636,7 +614,6 @@ impl Filesystem for SFS {
         _flags: i32,
         reply: fuser::ReplyCreate,
     ) {
-
         reply.error(libc::ENOSYS);
     }
     fn destroy(&mut self) {}
@@ -648,7 +625,6 @@ impl Filesystem for SFS {
         _link: &std::path::Path,
         reply: ReplyEntry,
     ) {
-
         reply.error(libc::ENOSYS);
     }
     fn release(
@@ -747,7 +723,6 @@ impl Filesystem for SFS {
         _mode: i32,
         reply: ReplyEmpty,
     ) {
-
         reply.error(libc::ENOSYS);
     }
     fn releasedir(
@@ -758,7 +733,6 @@ impl Filesystem for SFS {
         _flags: i32,
         reply: ReplyEmpty,
     ) {
-
         reply.error(libc::ENOSYS);
     }
     fn readdirplus(
@@ -769,7 +743,6 @@ impl Filesystem for SFS {
         _offset: i64,
         reply: fuser::ReplyDirectoryPlus,
     ) {
-
         reply.error(libc::ENOSYS);
     }
     fn removexattr(&mut self, _req: &Request<'_>, ino: u64, name: &OsStr, reply: ReplyEmpty) {
@@ -796,7 +769,6 @@ impl Filesystem for SFS {
         _flags: u32,
         reply: fuser::ReplyWrite,
     ) {
-
         reply.error(libc::ENOSYS);
     }
 }
