@@ -1,3 +1,4 @@
+use bitmap_allocator::{BitAlloc, BitAlloc16M, BitAlloc256M};
 use fuser::{
     Filesystem, KernelConfig, ReplyAttr, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyStatfs,
     Request, FUSE_ROOT_ID,
@@ -10,6 +11,8 @@ use std::os::unix::prelude::{FileExt, OsStrExt};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use std::vec;
+
+use std::alloc::{alloc, Layout};
 pub mod block_cache;
 pub mod block_dev;
 pub mod inode;
@@ -21,8 +24,18 @@ const CACHE_SIZE: usize = 512;
 pub struct SFS {
     db: Arc<DB>,
     dev: Arc<Mutex<block_cache::BlockCache<BLOCK_SIZE, CACHE_SIZE>>>,
-    next_inode: usize,
-    next_block: usize,
+    block_allocator: Box<BitAlloc256M>,
+    inode_allocator: Box<BitAlloc256M>,
+}
+
+fn new_allocator() -> Box<BitAlloc256M> {
+    let mut allocator = unsafe {
+        let layout = Layout::new::<BitAlloc256M>();
+        let ptr = alloc(layout) as *mut BitAlloc256M;
+        Box::from_raw(ptr)
+    };
+    allocator.insert(0..BitAlloc256M::CAP);
+    allocator
 }
 
 impl SFS {
@@ -30,28 +43,27 @@ impl SFS {
         Self {
             db: Arc::new(rocksdb::DB::open_default(meta).unwrap()),
             dev: Arc::new(Mutex::new(block_cache::BlockCache::new(data).unwrap())),
-            next_inode: FUSE_ROOT_ID as usize,
-            next_block: 0,
+            block_allocator: new_allocator(),
+            inode_allocator: new_allocator(),
         }
     }
     pub fn read_inode(&self, ino: u64) -> Result<Inode, c_int> {
         Inode::lookup(self.db.clone(), self.dev.clone(), ino)
     }
     pub fn alloc_block(&mut self) -> usize {
-        let block = self.next_block;
-        self.next_block += 1;
-        block
+        self.block_allocator.alloc().unwrap()
     }
     pub fn alloc_inode(&mut self) -> usize {
-        let inode = self.next_inode;
-        self.next_inode += 1;
-        inode
+        self.inode_allocator.alloc().unwrap()
     }
-    pub fn new_inode(&mut self, req: &Request<'_>) -> Inode {
+    pub fn new_inode(&mut self, req: &Request<'_>, ino: Option<u64>) -> Inode {
         let now = SystemTime::now();
         Inode {
             attrs: Attrs {
-                ino: self.alloc_inode() as u64,
+                ino: match ino {
+                    Some(ino) => ino,
+                    None => self.alloc_inode() as u64,
+                },
                 size: 0,
                 blocks: vec![],
                 atime: now,
@@ -127,20 +139,16 @@ impl Filesystem for SFS {
     fn init(&mut self, req: &Request, _config: &mut KernelConfig) -> Result<(), c_int> {
         simple_logger::SimpleLogger::new().init().unwrap();
         if self.read_inode(FUSE_ROOT_ID).is_err() {
-            let mut root = self.new_inode(req);
+            let mut root = self.new_inode(req, Some(FUSE_ROOT_ID));
             root.attrs.kind = FileType::Directory;
         }
         let it = self.db.iterator(rocksdb::IteratorMode::Start);
         for (_k, v) in it {
             let inode: Attrs = bincode::deserialize(&v).unwrap();
             let ino = inode.ino as usize;
-            if ino >= self.next_inode {
-                self.next_inode = ino + 1;
-            }
+            self.inode_allocator.remove(ino..ino + 1);
             for b in inode.blocks {
-                if b >= self.next_block {
-                    self.next_block = b + 1;
-                }
+                self.block_allocator.remove(b..b + 1);
             }
         }
         Ok(())
@@ -319,7 +327,7 @@ impl Filesystem for SFS {
                 reply.error(libc::EEXIST);
                 return;
             }
-            let mut new_inode = self.new_inode(req);
+            let mut new_inode = self.new_inode(req, None);
             new_inode.attrs.perm = (mode & !umask) as u16;
             parent.attrs.entries.insert(
                 name.to_str().unwrap().to_string(),
@@ -365,7 +373,7 @@ impl Filesystem for SFS {
                 reply.error(libc::EACCES);
                 return;
             }
-            let mut new_inode = self.new_inode(req);
+            let mut new_inode = self.new_inode(req, None);
             new_inode.attrs.kind = FileType::Directory;
             if parent.attrs.entries.contains_key(name.to_str().unwrap()) {
                 reply.error(libc::EEXIST);
@@ -475,7 +483,7 @@ impl Filesystem for SFS {
                 reply.error(libc::EACCES);
                 return;
             }
-            let mut new_inode = self.new_inode(req);
+            let mut new_inode = self.new_inode(req, None);
             new_inode.attrs.kind = FileType::Symlink;
             new_inode.attrs.link = link.to_path_buf();
             if parent.attrs.entries.contains_key(name.to_str().unwrap()) {

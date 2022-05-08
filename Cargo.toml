@@ -14,3 +14,4 @@ lru = "0.7.5"
 log = "0.4.17"
 anyhow = "1"
 simple_logger = "2.1.0"
+bitmap-allocator = { git = "https://github.com/rcore-os/bitmap-allocator" }
