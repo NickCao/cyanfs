@@ -12,7 +12,7 @@ use std::vec;
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
 pub enum FileType {
-    File,
+    RegularFile,
     Directory,
     Symlink,
 }
@@ -125,7 +125,7 @@ pub struct DirEntry {
 impl From<FileType> for fuser::FileType {
     fn from(kind: FileType) -> Self {
         match kind {
-            FileType::File => fuser::FileType::RegularFile,
+            FileType::RegularFile => fuser::FileType::RegularFile,
             FileType::Directory => fuser::FileType::Directory,
             FileType::Symlink => fuser::FileType::Symlink,
         }

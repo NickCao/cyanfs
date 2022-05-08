@@ -58,7 +58,7 @@ impl SFS {
                 mtime: now,
                 ctime: now,
                 crtime: now,
-                kind: FileType::File,
+                kind: FileType::RegularFile,
                 perm: 0o777,
                 nlink: 1,
                 uid: 0,
@@ -315,7 +315,7 @@ impl Filesystem for SFS {
                 DirEntry {
                     ino: new_inode.attrs.ino,
                     kind: match file_type {
-                        libc::S_IFREG => FileType::File,
+                        libc::S_IFREG => FileType::RegularFile,
                         libc::S_IFLNK => FileType::Symlink,
                         libc::S_IFDIR => FileType::Directory,
                         _ => {
