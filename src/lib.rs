@@ -554,17 +554,6 @@ impl Filesystem for SFS {
             reply.error(libc::EBADF);
         }
     }
-    fn lseek(
-        &mut self,
-        _req: &Request<'_>,
-        _ino: u64,
-        _fh: u64,
-        _offset: i64,
-        _whence: i32,
-        reply: fuser::ReplyLseek,
-    ) {
-        reply.error(libc::ENOSYS);
-    }
     fn rename(
         &mut self,
         _req: &Request<'_>,
