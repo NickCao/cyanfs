@@ -1,3 +1,4 @@
+use block_cache::BlockCache;
 use fuser::{
     Filesystem, KernelConfig, ReplyAttr, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyStatfs,
     Request, FUSE_ROOT_ID,
@@ -9,7 +10,8 @@ use std::ffi::OsStr;
 
 use std::os::raw::c_int;
 
-use std::sync::Arc;
+use std::os::unix::prelude::FileExt;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use std::vec;
 
@@ -28,6 +30,7 @@ pub enum FileKind {
 pub struct Inode {
     pub inner: InodeInner,
     pub db: Arc<DB>,
+    pub dev: Arc<Mutex<BlockCache<BLOCK_SIZE, 20>>>,
 }
 
 impl Drop for Inode {
@@ -38,6 +41,26 @@ impl Drop for Inode {
                 &bincode::serialize(&self.inner).unwrap(),
             )
             .unwrap();
+    }
+}
+
+impl FileExt for Inode {
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> std::io::Result<usize> {
+        let mut data = vec![];
+        for block in &self.inner.blocks {
+            let mut buf = [0u8; BLOCK_SIZE];
+            self.dev.lock()
+                .unwrap()
+                .read_block(*block, &mut buf)
+                .unwrap();
+            data.extend_from_slice(&buf);
+        }
+        let size = std::cmp::min((self.inner.size - offset) as usize, buf.len()) as usize;
+        buf[..size].copy_from_slice(&data[offset as usize..offset as usize + size]);
+        Ok(size)
+    }
+    fn write_at(&self, buf: &[u8], offset: u64) -> std::io::Result<usize> {
+        Ok(0)
     }
 }
 
@@ -91,7 +114,7 @@ impl From<Inode> for fuser::FileAttr {
 
 pub struct SFS {
     db: Arc<DB>,
-    dev: block_cache::BlockCache<BLOCK_SIZE, 20>,
+    dev: Arc<Mutex<block_cache::BlockCache<BLOCK_SIZE, 20>>>,
     next_inode: usize,
     next_block: usize,
 }
@@ -100,7 +123,7 @@ impl SFS {
     pub fn new(meta: &str, data: &str) -> Self {
         Self {
             db: Arc::new(rocksdb::DB::open_default(meta).unwrap()),
-            dev: block_cache::BlockCache::new(data).unwrap(),
+            dev: Arc::new(Mutex::new(block_cache::BlockCache::new(data).unwrap())),
             next_inode: FUSE_ROOT_ID as usize,
             next_block: 0,
         }
@@ -110,6 +133,7 @@ impl SFS {
             Some(Inode {
                 inner: bincode::deserialize(&value).unwrap(),
                 db: self.db.clone(),
+                dev: self.dev.clone(),
             })
         } else {
             None
@@ -135,6 +159,7 @@ impl SFS {
                 blocks: vec![],
             },
             db: self.db.clone(),
+            dev: self.dev.clone(),
         }
     }
     pub fn replace_data(&mut self, inode: &mut Inode, data: &[u8]) {
@@ -144,7 +169,10 @@ impl SFS {
             let mut buf = [0u8; BLOCK_SIZE];
             buf[..chunk.len()].copy_from_slice(chunk);
             let block = self.alloc_block();
-            self.dev.write_block(block, &buf).unwrap();
+            self.dev
+                .lock().unwrap()
+                .write_block(block, &buf)
+                .unwrap();
             new_blocks.push(block);
         }
         inode.inner.size = data.len() as u64;
@@ -154,7 +182,10 @@ impl SFS {
         let mut data = vec![];
         for block in &inode.inner.blocks {
             let mut buf = [0u8; BLOCK_SIZE];
-            self.dev.read_block(*block, &mut buf).unwrap();
+            self.dev.lock()
+                .unwrap()
+                .read_block(*block, &mut buf)
+                .unwrap();
             data.extend_from_slice(&buf);
         }
         data.truncate(inode.inner.size as usize);
@@ -185,6 +216,62 @@ impl Filesystem for SFS {
             }
         }
         Ok(())
+    }
+    fn open(&mut self, _req: &Request<'_>, ino: u64, _flags: i32, reply: fuser::ReplyOpen) {
+        if let Some(_inode) = self.read_inode(ino) {
+            reply.opened(0, 0);
+        } else {
+            reply.error(libc::ENOENT);
+        }
+    }
+    fn read(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        size: u32,
+        flags: i32,
+        lock_owner: Option<u64>,
+        reply: fuser::ReplyData,
+    ) {
+        println!("read");
+        assert!(offset >= 0);
+        if let Some(inode) = self.read_inode(ino) {
+            let mut buf = vec![0u8; size as usize];
+            let size = inode.read_at(&mut buf, offset as u64).unwrap();
+            buf.truncate(size);
+            reply.data(&buf);
+        } else {
+            reply.error(libc::ENOENT);
+        }
+    }
+    fn write(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        fh: u64,
+        offset: i64,
+        data: &[u8],
+        write_flags: u32,
+        flags: i32,
+        lock_owner: Option<u64>,
+        reply: fuser::ReplyWrite,
+    ) {
+        println!("write");
+        assert!(offset >= 0);
+        if let Some(mut inode) = self.read_inode(ino) {
+            let block = self.alloc_block();
+            inode.inner.blocks.push(block);
+            inode.inner.size = BLOCK_SIZE as u64;
+            self.dev.lock()
+                .unwrap()
+                .write_block(block, &[65u8; BLOCK_SIZE])
+                .unwrap();
+            reply.written(data.len() as u32);
+        } else {
+            reply.error(libc::ENOENT);
+        }
     }
 
     fn getattr(&mut self, _req: &Request, ino: u64, reply: ReplyAttr) {
