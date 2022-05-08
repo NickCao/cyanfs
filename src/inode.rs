@@ -18,7 +18,6 @@ pub enum FileType {
 }
 
 pub struct Inode {
-    pub oldattrs: Attrs,
     pub attrs: Attrs,
     pub db: Arc<DB>,
     pub dev: Arc<Mutex<BlockCache<BLOCK_SIZE, CACHE_SIZE>>>,
@@ -32,32 +31,27 @@ impl Inode {
     ) -> Result<Self, c_int> {
         if let Some(inner) = db.get(ino.to_le_bytes()).map_err(|_| libc::EIO)? {
             let attrs: Attrs = bincode::deserialize(&inner).map_err(|_| libc::EBADF)?;
-            Ok(Inode {
-                oldattrs: attrs.clone(),
-                attrs,
-                db,
-                dev,
-            })
+            Ok(Inode { attrs, db, dev })
         } else {
             Err(libc::ENOENT)
         }
     }
-}
-
-impl Drop for Inode {
-    fn drop(&mut self) {
-        if self.oldattrs != self.attrs {
-            if self.attrs.nlink != 0 {
-                self.db
-                    .put(
-                        self.attrs.ino.to_le_bytes(),
-                        &bincode::serialize(&self.attrs).unwrap(),
-                    )
-                    .unwrap();
-            } else {
-                self.db.delete(self.attrs.ino.to_le_bytes()).unwrap();
-            }
+    pub fn read<V>(&self, f: impl FnOnce(&Attrs) -> V) -> V {
+        f(&self.attrs)
+    }
+    pub fn modify<V>(&mut self, f: impl FnOnce(&mut Attrs) -> V) -> V {
+        let v = f(&mut self.attrs);
+        if self.attrs.nlink != 0 {
+            self.db
+                .put(
+                    self.attrs.ino.to_le_bytes(),
+                    &bincode::serialize(&self.attrs).unwrap(),
+                )
+                .unwrap();
+        } else {
+            self.db.delete(self.attrs.ino.to_le_bytes()).unwrap();
         }
+        v
     }
 }
 
@@ -163,24 +157,29 @@ impl From<FileType> for fuser::FileType {
     }
 }
 
+impl From<Attrs> for fuser::FileAttr {
+    fn from(attrs: Attrs) -> Self {
+        fuser::FileAttr {
+            ino: attrs.ino,
+            size: attrs.size,
+            blocks: attrs.blocks.len() as u64,
+            crtime: attrs.crtime,
+            atime: attrs.atime,
+            mtime: attrs.mtime,
+            ctime: attrs.ctime,
+            kind: attrs.kind.into(),
+            perm: attrs.perm,
+            nlink: attrs.nlink,
+            uid: attrs.uid,
+            gid: attrs.gid,
+            rdev: attrs.rdev,
+            blksize: BLOCK_SIZE as u32,
+            flags: attrs.flags,
+        }
+    }
+}
 impl From<Inode> for fuser::FileAttr {
     fn from(inode: Inode) -> Self {
-        fuser::FileAttr {
-            ino: inode.attrs.ino,
-            size: inode.attrs.size,
-            blocks: inode.attrs.blocks.len() as u64,
-            crtime: inode.attrs.crtime,
-            atime: inode.attrs.atime,
-            mtime: inode.attrs.mtime,
-            ctime: inode.attrs.ctime,
-            kind: inode.attrs.kind.into(),
-            perm: inode.attrs.perm,
-            nlink: inode.attrs.nlink,
-            uid: inode.attrs.uid,
-            gid: inode.attrs.gid,
-            rdev: inode.attrs.rdev,
-            blksize: BLOCK_SIZE as u32,
-            flags: inode.attrs.flags,
-        }
+        inode.attrs.into()
     }
 }
