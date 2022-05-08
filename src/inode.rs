@@ -11,7 +11,7 @@ use std::time::SystemTime;
 use std::vec;
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
-pub enum FileKind {
+pub enum FileType {
     File,
     Directory,
     Symlink,
@@ -100,26 +100,34 @@ impl FileExt for Inode {
 pub struct Attrs {
     pub ino: u64,
     pub size: u64,
-    pub kind: FileKind,
+    pub blocks: Vec<usize>,
+    pub atime: SystemTime,
+    pub mtime: SystemTime,
+    pub ctime: SystemTime,
+    pub crtime: SystemTime,
+    pub kind: FileType,
     pub perm: u16,
-    pub nlinks: u64,
+    pub nlink: u32,
+    pub uid: u32,
+    pub gid: u32,
+    pub rdev: u32,
+    pub flags: u32,
     pub entries: HashMap<String, DirEntry>,
     pub link: std::path::PathBuf,
-    pub blocks: Vec<usize>,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct DirEntry {
     pub ino: u64,
-    pub kind: FileKind,
+    pub kind: FileType,
 }
 
-impl From<FileKind> for fuser::FileType {
-    fn from(kind: FileKind) -> Self {
+impl From<FileType> for fuser::FileType {
+    fn from(kind: FileType) -> Self {
         match kind {
-            FileKind::File => fuser::FileType::RegularFile,
-            FileKind::Directory => fuser::FileType::Directory,
-            FileKind::Symlink => fuser::FileType::Symlink,
+            FileType::File => fuser::FileType::RegularFile,
+            FileType::Directory => fuser::FileType::Directory,
+            FileType::Symlink => fuser::FileType::Symlink,
         }
     }
 }
@@ -130,18 +138,18 @@ impl From<Inode> for fuser::FileAttr {
             ino: inode.attrs.ino,
             size: inode.attrs.size,
             blocks: inode.attrs.blocks.len() as u64,
-            crtime: SystemTime::UNIX_EPOCH,
-            atime: SystemTime::UNIX_EPOCH,
-            mtime: SystemTime::UNIX_EPOCH,
-            ctime: SystemTime::UNIX_EPOCH,
+            crtime: inode.attrs.crtime,
+            atime: inode.attrs.atime,
+            mtime: inode.attrs.mtime,
+            ctime: inode.attrs.ctime,
             kind: inode.attrs.kind.into(),
             perm: inode.attrs.perm,
-            nlink: 1,
-            uid: 0,
-            gid: 0,
-            rdev: 0,
+            nlink: inode.attrs.nlink,
+            uid: inode.attrs.uid,
+            gid: inode.attrs.gid,
+            rdev: inode.attrs.rdev,
             blksize: BLOCK_SIZE as u32,
-            flags: 0,
+            flags: inode.attrs.flags,
         }
     }
 }

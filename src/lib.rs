@@ -10,8 +10,8 @@ use std::os::unix::prelude::{FileExt, OsStrExt};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use std::vec;
-pub mod block_dev;
 pub mod block_cache;
+pub mod block_dev;
 pub mod inode;
 use crate::inode::*;
 
@@ -48,16 +48,25 @@ impl SFS {
         inode
     }
     pub fn new_inode(&mut self) -> Inode {
+        let now = SystemTime::now();
         Inode {
             attrs: Attrs {
                 ino: self.alloc_inode() as u64,
                 size: 0,
-                kind: FileKind::File,
+                blocks: vec![],
+                atime: now,
+                mtime: now,
+                ctime: now,
+                crtime: now,
+                kind: FileType::File,
                 perm: 0o777,
-                nlinks: 1,
+                nlink: 1,
+                uid: 0,
+                gid: 0,
+                rdev: 0,
+                flags: 0,
                 link: std::path::PathBuf::new(),
                 entries: HashMap::new(),
-                blocks: vec![],
             },
             db: self.db.clone(),
             dev: self.dev.clone(),
@@ -119,7 +128,7 @@ impl Filesystem for SFS {
         simple_logger::SimpleLogger::new().init().unwrap();
         if self.read_inode(FUSE_ROOT_ID).is_err() {
             let mut root = self.new_inode();
-            root.attrs.kind = FileKind::Directory;
+            root.attrs.kind = FileType::Directory;
         }
         let it = self.db.iterator(rocksdb::IteratorMode::Start);
         for (_k, v) in it {
@@ -292,7 +301,7 @@ impl Filesystem for SFS {
     ) {
         let file_type = mode & libc::S_IFMT as u32;
         if let Ok(mut parent) = self.read_inode(parent) {
-            if parent.attrs.kind != FileKind::Directory {
+            if parent.attrs.kind != FileType::Directory {
                 reply.error(libc::EACCES);
                 return;
             }
@@ -306,9 +315,9 @@ impl Filesystem for SFS {
                 DirEntry {
                     ino: new_inode.attrs.ino,
                     kind: match file_type {
-                        libc::S_IFREG => FileKind::File,
-                        libc::S_IFLNK => FileKind::Symlink,
-                        libc::S_IFDIR => FileKind::Directory,
+                        libc::S_IFREG => FileType::File,
+                        libc::S_IFLNK => FileType::Symlink,
+                        libc::S_IFDIR => FileType::Directory,
                         _ => {
                             reply.error(libc::ENOSYS);
                             return;
@@ -349,12 +358,12 @@ impl Filesystem for SFS {
         reply: ReplyEntry,
     ) {
         if let Ok(mut parent) = self.read_inode(parent) {
-            if parent.attrs.kind != FileKind::Directory {
+            if parent.attrs.kind != FileType::Directory {
                 reply.error(libc::EACCES);
                 return;
             }
             let mut new_inode = self.new_inode();
-            new_inode.attrs.kind = FileKind::Directory;
+            new_inode.attrs.kind = FileType::Directory;
             if parent.attrs.entries.contains_key(name.to_str().unwrap()) {
                 reply.error(libc::EEXIST);
                 return;
@@ -363,7 +372,7 @@ impl Filesystem for SFS {
                 name.to_str().unwrap().to_string(),
                 DirEntry {
                     ino: new_inode.attrs.ino,
-                    kind: FileKind::Directory,
+                    kind: FileType::Directory,
                 },
             );
             reply.entry(&Duration::new(0, 0), &new_inode.into(), 0);
@@ -388,7 +397,7 @@ impl Filesystem for SFS {
                         kind: inode.attrs.kind,
                     },
                 );
-                inode.attrs.nlinks += 1;
+                inode.attrs.nlink += 1;
                 reply.entry(&Duration::new(0, 0), &inode.into(), 0);
             }
         } else {
@@ -459,12 +468,12 @@ impl Filesystem for SFS {
         reply: ReplyEntry,
     ) {
         if let Ok(mut parent) = self.read_inode(parent) {
-            if parent.attrs.kind != FileKind::Directory {
+            if parent.attrs.kind != FileType::Directory {
                 reply.error(libc::EACCES);
                 return;
             }
             let mut new_inode = self.new_inode();
-            new_inode.attrs.kind = FileKind::Symlink;
+            new_inode.attrs.kind = FileType::Symlink;
             new_inode.attrs.link = link.to_path_buf();
             if parent.attrs.entries.contains_key(name.to_str().unwrap()) {
                 reply.error(libc::EEXIST);
@@ -474,7 +483,7 @@ impl Filesystem for SFS {
                 name.to_str().unwrap().to_string(),
                 DirEntry {
                     ino: new_inode.attrs.ino,
-                    kind: FileKind::Symlink,
+                    kind: FileType::Symlink,
                 },
             );
             reply.entry(&Duration::new(0, 0), &new_inode.into(), 0);
