@@ -1,4 +1,8 @@
 use bitmap_allocator::{BitAlloc, BitAlloc256M};
+use cannyls::nvm::MemoryNvm;
+use cannyls::nvm::NonVolatileMemory;
+use cannyls::storage::Storage;
+use cannyls::storage::StorageBuilder;
 use fuser::{
     Filesystem, KernelConfig, ReplyAttr, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyStatfs,
     Request, FUSE_ROOT_ID,
@@ -20,9 +24,9 @@ pub mod block_dev;
 pub mod inode;
 use crate::inode::*;
 
-pub struct SFS<const BLOCK_SIZE: usize> {
+pub struct SFS<const BLOCK_SIZE: usize, T: NonVolatileMemory> {
     dev: Arc<Mutex<block_cache::BlockCache<BLOCK_SIZE>>>,
-    meta: Arc<Mutex<InodeCache<BLOCK_SIZE>>>,
+    meta: Arc<Mutex<InodeCache<BLOCK_SIZE, T>>>,
     block_allocator: Box<BitAlloc256M>,
     inode_allocator: Box<BitAlloc256M>,
 }
@@ -37,15 +41,14 @@ fn new_allocator(avail: Range<usize>) -> Box<BitAlloc256M> {
     allocator
 }
 
-impl<const BLOCK_SIZE: usize> SFS<BLOCK_SIZE> {
-    pub fn new(meta: &str, data: &str, block_cache: usize, inode_cache: usize) -> Self {
-        let db = Arc::new(rocksdb::DB::open_default(meta).unwrap());
+impl<const BLOCK_SIZE: usize, T: NonVolatileMemory> SFS<BLOCK_SIZE, T> {
+    pub fn new(data: &str, block_cache: usize, inode_cache: usize, db: Storage<T>) -> Self {
         let dev = Arc::new(Mutex::new(
             block_cache::BlockCache::new(data, block_cache).unwrap(),
         ));
         Self {
             dev: dev.clone(),
-            meta: Arc::new(Mutex::new(InodeCache::new(db, dev, inode_cache))),
+            meta: Arc::new(Mutex::new(InodeCache::new(Arc::new(Mutex::new(db)), dev, inode_cache))),
             block_allocator: new_allocator(0..BitAlloc256M::CAP),
             inode_allocator: new_allocator(FUSE_ROOT_ID as usize..BitAlloc256M::CAP),
         }
@@ -129,7 +132,7 @@ impl<const BLOCK_SIZE: usize> SFS<BLOCK_SIZE> {
     }
 }
 
-impl<const BLOCK_SIZE: usize> Filesystem for SFS<BLOCK_SIZE> {
+impl<const BLOCK_SIZE: usize, T: NonVolatileMemory> Filesystem for SFS<BLOCK_SIZE, T> {
     fn init(&mut self, req: &Request, _config: &mut KernelConfig) -> Result<(), c_int> {
         if self
             .meta
