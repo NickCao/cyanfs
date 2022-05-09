@@ -25,16 +25,16 @@ impl<const BLOCK_SIZE: usize> Drop for Block<BLOCK_SIZE> {
     }
 }
 
-pub struct BlockCache<const BLOCK_SIZE: usize, const CACHE_SIZE: usize> {
+pub struct BlockCache<const BLOCK_SIZE: usize> {
     dev: Arc<BlockDevice<BLOCK_SIZE>>,
     cache: LruCache<usize, Block<BLOCK_SIZE>>,
 }
 
-impl<const BLOCK_SIZE: usize, const CACHE_SIZE: usize> BlockCache<BLOCK_SIZE, CACHE_SIZE> {
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
+impl<const BLOCK_SIZE: usize> BlockCache<BLOCK_SIZE> {
+    pub fn new<P: AsRef<Path>>(path: P, capacity: usize) -> Result<Self> {
         Ok(Self {
             dev: Arc::from(BlockDevice::new(path)?),
-            cache: LruCache::new(CACHE_SIZE),
+            cache: LruCache::new(capacity),
         })
     }
     pub fn read_block(&mut self, block_id: usize, buf: &mut [u8; BLOCK_SIZE]) -> Result<()> {

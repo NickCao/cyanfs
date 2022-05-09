@@ -8,10 +8,6 @@ fn main() {
         MountOption::AutoUnmount,
         MountOption::DefaultPermissions,
     ];
-    mount2(
-        SFS::new("target/meta", "/dev/nvme0n1p3"),
-        "/tmp/sfs",
-        &options,
-    )
-    .unwrap();
+    let fs: SFS<512> = SFS::new("target/meta", "/dev/nvme0n1p3");
+    mount2(fs, "/tmp/sfs", &options).unwrap();
 }
