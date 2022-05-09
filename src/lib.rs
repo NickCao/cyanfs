@@ -20,10 +20,7 @@ pub mod block_dev;
 pub mod inode;
 use crate::inode::*;
 
-const SFS_BLOCK_SIZE: usize = 512;
-
 pub struct SFS<const BLOCK_SIZE: usize> {
-    db: Arc<DB>,
     dev: Arc<Mutex<block_cache::BlockCache<BLOCK_SIZE>>>,
     meta: Arc<Mutex<InodeCache<BLOCK_SIZE>>>,
     block_allocator: Box<BitAlloc256M>,
@@ -47,7 +44,6 @@ impl<const BLOCK_SIZE: usize> SFS<BLOCK_SIZE> {
             block_cache::BlockCache::new(data, 1024).unwrap(),
         ));
         Self {
-            db: db.clone(),
             dev: dev.clone(),
             meta: Arc::new(Mutex::new(InodeCache::new(db, dev, 1024))),
             block_allocator: new_allocator(0..BitAlloc256M::CAP),
@@ -425,7 +421,12 @@ impl<const BLOCK_SIZE: usize> Filesystem for SFS<BLOCK_SIZE> {
         _datasync: bool,
         reply: ReplyEmpty,
     ) {
-        reply.error(libc::ENOSYS);
+        match self.meta.lock().unwrap().read(ino, |i| {
+            i.fsync(self.dev.clone());
+        }) {
+            Ok(_) => reply.ok(),
+            Err(err) => reply.error(err),
+        };
     }
     fn rename(
         &mut self,

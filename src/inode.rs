@@ -1,11 +1,11 @@
 use crate::block_cache::BlockCache;
 use lru::LruCache;
+use no_deadlocks::Mutex;
 use rocksdb::DB;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::os::raw::c_int;
 use std::os::unix::prelude::FileExt;
-use no_deadlocks::Mutex;
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::vec;
@@ -88,6 +88,11 @@ impl<const BLOCK_SIZE: usize> Attrs<BLOCK_SIZE> {
                 .unwrap();
         }
         Ok(buf.len())
+    }
+    pub fn fsync(&self, dev: Arc<Mutex<BlockCache<BLOCK_SIZE>>>) {
+        self.blocks
+            .iter()
+            .for_each(|&block| dev.lock().unwrap().flush_block(block));
     }
 }
 
