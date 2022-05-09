@@ -1,16 +1,16 @@
 use bitmap_allocator::{BitAlloc, BitAlloc256M};
 use fuser::{
-    FileAttr, Filesystem, KernelConfig, ReplyAttr, ReplyDirectory, ReplyEmpty, ReplyEntry,
-    ReplyStatfs, Request, FUSE_ROOT_ID,
+    Filesystem, KernelConfig, ReplyAttr, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyStatfs,
+    Request, FUSE_ROOT_ID,
 };
-use no_deadlocks::Mutex;
-use rocksdb::DB;
+
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::ops::Range;
 use std::os::raw::c_int;
 use std::os::unix::prelude::{FileExt, OsStrExt};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 use std::vec;
 
@@ -147,6 +147,7 @@ impl<const BLOCK_SIZE: usize> Filesystem for SFS<BLOCK_SIZE> {
             root.kind = FileType::Directory;
             self.meta.lock().unwrap().insert(root);
         }
+        self.meta.lock().unwrap().flush();
         self.meta
             .lock()
             .unwrap()
@@ -207,8 +208,7 @@ impl<const BLOCK_SIZE: usize> Filesystem for SFS<BLOCK_SIZE> {
                 i.blocks.push(self.block_allocator.alloc().unwrap());
             }
 
-            let size = i.write_at(self.dev.clone(), data, offset as u64).unwrap();
-            size
+            i.write_at(self.dev.clone(), data, offset as u64).unwrap()
         }) {
             Ok(size) => reply.written(size as u32),
             Err(err) => reply.error(err),
@@ -445,8 +445,7 @@ impl<const BLOCK_SIZE: usize> Filesystem for SFS<BLOCK_SIZE> {
                 .unwrap()
                 .modify(parent, |p| {
                     let ent = p.entries.remove(name.to_str().unwrap()).unwrap();
-                    p.entries.insert(name.to_str().unwrap().to_string(), ent);
-                    log::info!("{:?}", p.entries)
+                    p.entries.insert(newname.to_str().unwrap().to_string(), ent);
                 })
                 .unwrap();
             reply.ok();

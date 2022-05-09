@@ -1,11 +1,11 @@
 use crate::block_cache::BlockCache;
 use lru::LruCache;
-use no_deadlocks::Mutex;
 use rocksdb::DB;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::os::raw::c_int;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::SystemTime;
 use std::vec;
 
@@ -214,32 +214,30 @@ impl<const BLOCK_SIZE: usize> InodeCache<BLOCK_SIZE> {
     ) -> Result<V, c_int> {
         if let Some(inode) = self.cache.get(&ino) {
             Ok(f(&inode.attrs))
-        } else {
-            if let Ok(data) = self.db.get_pinned(ino.to_le_bytes()) {
-                if let Some(data) = data {
-                    if let Ok(attrs) = bincode::deserialize::<Attrs<BLOCK_SIZE>>(&data) {
-                        let v = f(&attrs);
-                        self.cache.put(
-                            ino,
-                            Inode {
-                                attrs,
-                                db: self.db.clone(),
-                                dev: self.dev.clone(),
-                                dirty: false,
-                            },
-                        );
-                        Ok(v)
-                    } else {
-                        log::info!("1");
-                        Err(libc::EIO)
-                    }
+        } else if let Ok(data) = self.db.get_pinned(ino.to_le_bytes()) {
+            if let Some(data) = data {
+                if let Ok(attrs) = bincode::deserialize::<Attrs<BLOCK_SIZE>>(&data) {
+                    let v = f(&attrs);
+                    self.cache.put(
+                        ino,
+                        Inode {
+                            attrs,
+                            db: self.db.clone(),
+                            dev: self.dev.clone(),
+                            dirty: false,
+                        },
+                    );
+                    Ok(v)
                 } else {
-                    Err(libc::ENOENT)
+                    log::info!("1");
+                    Err(libc::EIO)
                 }
             } else {
-                log::info!("2");
-                Err(libc::EIO)
+                Err(libc::ENOENT)
             }
+        } else {
+            log::info!("2");
+            Err(libc::EIO)
         }
     }
 
@@ -252,32 +250,30 @@ impl<const BLOCK_SIZE: usize> InodeCache<BLOCK_SIZE> {
         if let Some(inode) = self.cache.get_mut(&ino) {
             inode.dirty = true;
             Ok(f(&mut inode.attrs))
-        } else {
-            if let Ok(data) = self.db.get_pinned(ino.to_le_bytes()) {
-                if let Some(data) = data {
-                    if let Ok(mut attrs) = bincode::deserialize::<Attrs<BLOCK_SIZE>>(&data) {
-                        let v = f(&mut attrs);
-                        self.cache.put(
-                            ino,
-                            Inode {
-                                attrs,
-                                db: self.db.clone(),
-                                dev: self.dev.clone(),
-                                dirty: true,
-                            },
-                        );
-                        Ok(v)
-                    } else {
-                        log::info!("3");
-                        Err(libc::EIO)
-                    }
+        } else if let Ok(data) = self.db.get_pinned(ino.to_le_bytes()) {
+            if let Some(data) = data {
+                if let Ok(mut attrs) = bincode::deserialize::<Attrs<BLOCK_SIZE>>(&data) {
+                    let v = f(&mut attrs);
+                    self.cache.put(
+                        ino,
+                        Inode {
+                            attrs,
+                            db: self.db.clone(),
+                            dev: self.dev.clone(),
+                            dirty: true,
+                        },
+                    );
+                    Ok(v)
                 } else {
-                    Err(libc::ENOENT)
+                    log::info!("3");
+                    Err(libc::EIO)
                 }
             } else {
-                log::info!("4");
-                Err(libc::EIO)
+                Err(libc::ENOENT)
             }
+        } else {
+            log::info!("4");
+            Err(libc::EIO)
         }
     }
 
