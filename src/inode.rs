@@ -78,6 +78,8 @@ impl FileExt for Inode {
         let mut data = vec![];
         let begin = offset as usize / BLOCK_SIZE;
         let end = (offset as usize + buf.len() + (BLOCK_SIZE - 1)) / BLOCK_SIZE;
+        let off = offset as usize % BLOCK_SIZE;
+        let eoff = (offset as usize + buf.len()) % BLOCK_SIZE;
         for (i, block) in self
             .attrs
             .blocks
@@ -87,7 +89,7 @@ impl FileExt for Inode {
             .take(end - begin)
         {
             let mut buf = [0u8; BLOCK_SIZE];
-            if i == begin || i == end {
+            if (i == begin && off != 0) || (i == end && eoff != 0) {
                 self.dev
                     .lock()
                     .unwrap()
@@ -96,7 +98,6 @@ impl FileExt for Inode {
             }
             data.extend_from_slice(&buf);
         }
-        let off = offset as usize % BLOCK_SIZE;
         data[off..off + buf.len()].copy_from_slice(buf);
         for (i, block) in self
             .attrs
