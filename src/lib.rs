@@ -1,8 +1,8 @@
 use bitmap_allocator::{BitAlloc, BitAlloc256M};
-use cannyls::nvm::MemoryNvm;
+
 use cannyls::nvm::NonVolatileMemory;
 use cannyls::storage::Storage;
-use cannyls::storage::StorageBuilder;
+
 use fuser::{
     Filesystem, KernelConfig, ReplyAttr, ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyStatfs,
     Request, FUSE_ROOT_ID,

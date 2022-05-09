@@ -1,4 +1,4 @@
-use cannyls::nvm::MemoryNvm;
+use cannyls::nvm::FileNvm;
 use cannyls::storage::StorageBuilder;
 use fuser::{mount2, MountOption};
 use sfs::SFS;
@@ -11,13 +11,14 @@ fn main() {
         MountOption::AutoUnmount,
         MountOption::DefaultPermissions,
     ];
-    let fs: SFS<4096, MemoryNvm> = SFS::new(
+    let (nvm, _) = FileNvm::create_if_absent("target/sfs-meta", 1024 * 1024 * 1024 * 5).unwrap();
+    let fs: SFS<4096, FileNvm> = SFS::new(
         "/dev/nvme0n1p3",
         2048,
         2048,
         StorageBuilder::new()
             .journal_region_ratio(0.6)
-            .create(MemoryNvm::new(vec![0; 1024 * 1024 * 1024 * 5]))
+            .create(nvm)
             .unwrap(),
     );
     mount2(fs, "/tmp/sfs", &options).unwrap();
