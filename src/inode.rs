@@ -246,28 +246,31 @@ impl<const BLOCK_SIZE: usize, T: NonVolatileMemory> InodeCache<BLOCK_SIZE, T> {
     ) -> Result<V, c_int> {
         if let Some(inode) = self.cache.get(&ino) {
             Ok(f(&inode.attrs))
-        } else if let Ok(data) = self.db.lock().unwrap().get(&LumpId::new(ino.into())) {
-            if let Some(data) = data {
-                if let Ok(attrs) = bincode::deserialize::<Attrs<BLOCK_SIZE>>(data.as_bytes()) {
-                    let v = f(&attrs);
-                    self.cache.put(
-                        ino,
-                        Inode {
-                            attrs,
-                            db: self.db.clone(),
-                            dev: self.dev.clone(),
-                            dirty: false,
-                        },
-                    );
-                    Ok(v)
+        } else {
+            let data = self.db.lock().unwrap().get(&LumpId::new(ino.into()));
+            if let Ok(data) = data {
+                if let Some(data) = data {
+                    if let Ok(attrs) = bincode::deserialize::<Attrs<BLOCK_SIZE>>(data.as_bytes()) {
+                        let v = f(&attrs);
+                        self.cache.put(
+                            ino,
+                            Inode {
+                                attrs,
+                                db: self.db.clone(),
+                                dev: self.dev.clone(),
+                                dirty: false,
+                            },
+                        );
+                        Ok(v)
+                    } else {
+                        Err(libc::EIO)
+                    }
                 } else {
-                    Err(libc::EIO)
+                    Err(libc::ENOENT)
                 }
             } else {
-                Err(libc::ENOENT)
+                Err(libc::EIO)
             }
-        } else {
-            Err(libc::EIO)
         }
     }
 
@@ -279,28 +282,33 @@ impl<const BLOCK_SIZE: usize, T: NonVolatileMemory> InodeCache<BLOCK_SIZE, T> {
         if let Some(inode) = self.cache.get_mut(&ino) {
             inode.dirty = true;
             Ok(f(&mut inode.attrs))
-        } else if let Ok(data) = self.db.lock().unwrap().get(&LumpId::new(ino.into())) {
-            if let Some(data) = data {
-                if let Ok(mut attrs) = bincode::deserialize::<Attrs<BLOCK_SIZE>>(data.as_bytes()) {
-                    let v = f(&mut attrs);
-                    self.cache.put(
-                        ino,
-                        Inode {
-                            attrs,
-                            db: self.db.clone(),
-                            dev: self.dev.clone(),
-                            dirty: true,
-                        },
-                    );
-                    Ok(v)
+        } else {
+            let data = self.db.lock().unwrap().get(&LumpId::new(ino.into()));
+            if let Ok(data) = data {
+                if let Some(data) = data {
+                    if let Ok(mut attrs) =
+                        bincode::deserialize::<Attrs<BLOCK_SIZE>>(data.as_bytes())
+                    {
+                        let v = f(&mut attrs);
+                        self.cache.put(
+                            ino,
+                            Inode {
+                                attrs,
+                                db: self.db.clone(),
+                                dev: self.dev.clone(),
+                                dirty: true,
+                            },
+                        );
+                        Ok(v)
+                    } else {
+                        Err(libc::EIO)
+                    }
                 } else {
-                    Err(libc::EIO)
+                    Err(libc::ENOENT)
                 }
             } else {
-                Err(libc::ENOENT)
+                Err(libc::EIO)
             }
-        } else {
-            Err(libc::EIO)
         }
     }
 
