@@ -136,7 +136,6 @@ impl<const BLOCK_SIZE: usize> SFS<BLOCK_SIZE> {
 
 impl<const BLOCK_SIZE: usize> Filesystem for SFS<BLOCK_SIZE> {
     fn init(&mut self, req: &Request, _config: &mut KernelConfig) -> Result<(), c_int> {
-        simple_logger::SimpleLogger::new().init().unwrap();
         if self
             .meta
             .lock()
@@ -353,7 +352,8 @@ impl<const BLOCK_SIZE: usize> Filesystem for SFS<BLOCK_SIZE> {
         };
     }
     fn lookup(&mut self, _req: &Request<'_>, parent: u64, name: &OsStr, reply: ReplyEntry) {
-        match self.lookup_dirent(parent, name) {
+        let ent = self.lookup_dirent(parent, name);
+        match ent {
             Ok(ent) => match self.meta.lock().unwrap().read(ent.ino, |e| e.into()) {
                 Ok(attrs) => reply.entry(&Duration::new(0, 0), &attrs, 0),
                 Err(err) => reply.error(err),
@@ -438,16 +438,29 @@ impl<const BLOCK_SIZE: usize> Filesystem for SFS<BLOCK_SIZE> {
         _flags: u32,
         reply: ReplyEmpty,
     ) {
-        // TODO: handle errors
-        let entry = self.remove_dirent(parent, name);
-        if entry.is_err() {
-            reply.error(entry.unwrap_err());
-            return;
-        }
-        if let Err(err) = self.insert_dirent(newparent, newname, entry.unwrap()) {
-            reply.error(err);
-        } else {
+        // TODO: check error
+        if parent == newparent {
+            self.meta
+                .lock()
+                .unwrap()
+                .modify(parent, |p| {
+                    let ent = p.entries.remove(name.to_str().unwrap()).unwrap();
+                    p.entries.insert(name.to_str().unwrap().to_string(), ent);
+                    log::info!("{:?}", p.entries)
+                })
+                .unwrap();
             reply.ok();
+        } else {
+            let entry = self.remove_dirent(parent, name);
+            if entry.is_err() {
+                reply.error(entry.unwrap_err());
+                return;
+            }
+            if let Err(err) = self.insert_dirent(newparent, newname, entry.unwrap()) {
+                reply.error(err);
+            } else {
+                reply.ok();
+            }
         }
     }
     fn symlink(

@@ -5,7 +5,6 @@ use rocksdb::DB;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::os::raw::c_int;
-use std::os::unix::prelude::FileExt;
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::vec;
@@ -188,6 +187,7 @@ impl<const BLOCK_SIZE: usize> InodeCache<BLOCK_SIZE> {
             if let Ok(attrs) = bincode::deserialize::<Attrs<BLOCK_SIZE>>(&data) {
                 f(&attrs);
             } else {
+                log::info!("5");
                 return Err(libc::EIO);
             }
         }
@@ -230,12 +230,14 @@ impl<const BLOCK_SIZE: usize> InodeCache<BLOCK_SIZE> {
                         );
                         Ok(v)
                     } else {
+                        log::info!("1");
                         Err(libc::EIO)
                     }
                 } else {
                     Err(libc::ENOENT)
                 }
             } else {
+                log::info!("2");
                 Err(libc::EIO)
             }
         }
@@ -261,17 +263,19 @@ impl<const BLOCK_SIZE: usize> InodeCache<BLOCK_SIZE> {
                                 attrs,
                                 db: self.db.clone(),
                                 dev: self.dev.clone(),
-                                dirty: false,
+                                dirty: true,
                             },
                         );
                         Ok(v)
                     } else {
+                        log::info!("3");
                         Err(libc::EIO)
                     }
                 } else {
                     Err(libc::ENOENT)
                 }
             } else {
+                log::info!("4");
                 Err(libc::EIO)
             }
         }

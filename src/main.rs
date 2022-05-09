@@ -2,6 +2,7 @@ use fuser::{mount2, MountOption};
 use sfs::SFS;
 
 fn main() {
+    simple_logger::SimpleLogger::new().init().unwrap();
     let options = vec![
         MountOption::FSName("sfs".to_string()),
         MountOption::AllowOther,
