@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::ops::Range;
 use std::os::raw::c_int;
-use std::os::unix::prelude::{FileExt, OsStrExt};
+use std::os::unix::prelude::OsStrExt;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
@@ -38,23 +38,17 @@ fn new_allocator(avail: Range<usize>) -> Box<BitAlloc256M> {
 }
 
 impl<const BLOCK_SIZE: usize> SFS<BLOCK_SIZE> {
-    pub fn new(meta: &str, data: &str) -> Self {
+    pub fn new(meta: &str, data: &str, block_cache: usize, inode_cache: usize) -> Self {
         let db = Arc::new(rocksdb::DB::open_default(meta).unwrap());
         let dev = Arc::new(Mutex::new(
-            block_cache::BlockCache::new(data, 1024).unwrap(),
+            block_cache::BlockCache::new(data, block_cache).unwrap(),
         ));
         Self {
             dev: dev.clone(),
-            meta: Arc::new(Mutex::new(InodeCache::new(db, dev, 1024))),
+            meta: Arc::new(Mutex::new(InodeCache::new(db, dev, inode_cache))),
             block_allocator: new_allocator(0..BitAlloc256M::CAP),
             inode_allocator: new_allocator(FUSE_ROOT_ID as usize..BitAlloc256M::CAP),
         }
-    }
-    pub fn alloc_block(&mut self) -> usize {
-        self.block_allocator.alloc().unwrap()
-    }
-    pub fn alloc_inode(&mut self) -> usize {
-        self.inode_allocator.alloc().unwrap()
     }
     pub fn new_with_parent<V>(
         &mut self,
@@ -77,7 +71,7 @@ impl<const BLOCK_SIZE: usize> SFS<BLOCK_SIZE> {
         Attrs {
             ino: match ino {
                 Some(ino) => ino,
-                None => self.alloc_inode() as u64,
+                None => self.inode_allocator.alloc().unwrap() as u64,
             },
             size: 0,
             extents: vec![],
@@ -123,11 +117,12 @@ impl<const BLOCK_SIZE: usize> SFS<BLOCK_SIZE> {
         entry: DirEntry,
     ) -> Result<(), c_int> {
         let res = self.meta.lock().unwrap().modify(parent, |p| {
-            if let None = p.entries.get(name.to_str().unwrap()) {
-                p.entries.insert(name.to_str().unwrap().to_string(), entry);
-                Ok(())
-            } else {
-                Err(libc::EEXIST)
+            match p.entries.get(name.to_str().unwrap()) {
+                None => {
+                    p.entries.insert(name.to_str().unwrap().to_string(), entry);
+                    Ok(())
+                }
+                Some(_) => Err(libc::EEXIST),
             }
         });
         res.and(res.unwrap())
@@ -456,8 +451,8 @@ impl<const BLOCK_SIZE: usize> Filesystem for SFS<BLOCK_SIZE> {
             reply.ok();
         } else {
             let entry = self.remove_dirent(parent, name);
-            if entry.is_err() {
-                reply.error(entry.unwrap_err());
+            if let Err(err) = entry {
+                reply.error(err);
                 return;
             }
             if let Err(err) = self.insert_dirent(newparent, newname, entry.unwrap()) {
@@ -494,5 +489,35 @@ impl<const BLOCK_SIZE: usize> Filesystem for SFS<BLOCK_SIZE> {
             Ok(link) => reply.data(&link),
             Err(err) => reply.error(err),
         }
+    }
+    fn fallocate(
+        &mut self,
+        _req: &Request<'_>,
+        ino: u64,
+        _fh: u64,
+        offset: i64,
+        length: i64,
+        _mode: i32,
+        reply: ReplyEmpty,
+    ) {
+        match self.meta.lock().unwrap().modify(ino, |i| {
+            let new_size = offset as usize + length as usize;
+            if new_size > i.size as usize {
+                i.size = new_size as u64;
+            }
+            let block_cnt = (new_size + (BLOCK_SIZE - 1)) / BLOCK_SIZE;
+            let origi_cnt = i.blocks();
+            if block_cnt > origi_cnt {
+                let cnt = block_cnt - origi_cnt;
+                let begin = self
+                    .block_allocator
+                    .alloc_contiguous(block_cnt - origi_cnt, 0)
+                    .unwrap();
+                i.extents.push(begin..begin + cnt);
+            }
+        }) {
+            Ok(_) => reply.ok(),
+            Err(err) => reply.error(err),
+        };
     }
 }
