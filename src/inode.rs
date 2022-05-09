@@ -3,6 +3,7 @@ use lru::LruCache;
 use rocksdb::DB;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::ops::Range;
 use std::os::raw::c_int;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -37,6 +38,9 @@ impl<const BLOCK_SIZE: usize> Drop for Inode<BLOCK_SIZE> {
 }
 
 impl<const BLOCK_SIZE: usize> Attrs<BLOCK_SIZE> {
+    pub fn blocks(&self) -> usize {
+        self.extents.iter().map(Range::len).sum()
+    }
     pub fn read_at(
         &self,
         dev: Arc<Mutex<BlockCache<BLOCK_SIZE>>>,
@@ -46,9 +50,15 @@ impl<const BLOCK_SIZE: usize> Attrs<BLOCK_SIZE> {
         let mut data = vec![];
         let begin = offset as usize / BLOCK_SIZE;
         let end = (offset as usize + buf.len() + (BLOCK_SIZE - 1)) / BLOCK_SIZE;
-        for block in self.blocks.iter().skip(begin).take(end - begin) {
+        for block in self
+            .extents
+            .iter()
+            .flat_map(|r| r.clone())
+            .skip(begin)
+            .take(end - begin)
+        {
             let mut buf = [0u8; BLOCK_SIZE];
-            dev.lock().unwrap().read_block(*block, &mut buf).unwrap();
+            dev.lock().unwrap().read_block(block, &mut buf).unwrap();
             data.extend_from_slice(&buf);
         }
         let size = std::cmp::min((self.size - offset) as usize, buf.len()) as usize;
@@ -67,19 +77,33 @@ impl<const BLOCK_SIZE: usize> Attrs<BLOCK_SIZE> {
         let end = (offset as usize + buf.len() + (BLOCK_SIZE - 1)) / BLOCK_SIZE;
         let off = offset as usize % BLOCK_SIZE;
         let eoff = (offset as usize + buf.len()) % BLOCK_SIZE;
-        for (i, block) in self.blocks.iter().enumerate().skip(begin).take(end - begin) {
+        for (i, block) in self
+            .extents
+            .iter()
+            .flat_map(|r| r.clone())
+            .enumerate()
+            .skip(begin)
+            .take(end - begin)
+        {
             let mut buf = [0u8; BLOCK_SIZE];
             if (i == begin && off != 0) || (i == end && eoff != 0) {
-                dev.lock().unwrap().read_block(*block, &mut buf).unwrap();
+                dev.lock().unwrap().read_block(block, &mut buf).unwrap();
             }
             data.extend_from_slice(&buf);
         }
         data[off..off + buf.len()].copy_from_slice(buf);
-        for (i, block) in self.blocks.iter().skip(begin).take(end - begin).enumerate() {
+        for (i, block) in self
+            .extents
+            .iter()
+            .flat_map(|r| r.clone())
+            .skip(begin)
+            .take(end - begin)
+            .enumerate()
+        {
             dev.lock()
                 .unwrap()
                 .write_block(
-                    *block,
+                    block,
                     data[i * BLOCK_SIZE..(i + 1) * BLOCK_SIZE]
                         .try_into()
                         .unwrap(),
@@ -89,9 +113,10 @@ impl<const BLOCK_SIZE: usize> Attrs<BLOCK_SIZE> {
         Ok(buf.len())
     }
     pub fn fsync(&self, dev: Arc<Mutex<BlockCache<BLOCK_SIZE>>>) {
-        self.blocks
+        self.extents
             .iter()
-            .for_each(|&block| dev.lock().unwrap().flush_block(block));
+            .flat_map(|r| r.clone())
+            .for_each(|block| dev.lock().unwrap().flush_block(block));
     }
 }
 
@@ -99,7 +124,7 @@ impl<const BLOCK_SIZE: usize> Attrs<BLOCK_SIZE> {
 pub struct Attrs<const BLOCK_SIZE: usize> {
     pub ino: u64,
     pub size: u64,
-    pub blocks: Vec<usize>,
+    pub extents: Vec<Range<usize>>,
     pub atime: SystemTime,
     pub mtime: SystemTime,
     pub ctime: SystemTime,
@@ -148,7 +173,7 @@ impl<const BLOCK_SIZE: usize> From<&Attrs<BLOCK_SIZE>> for fuser::FileAttr {
         fuser::FileAttr {
             ino: attrs.ino,
             size: attrs.size,
-            blocks: attrs.blocks.len() as u64,
+            blocks: attrs.blocks() as u64,
             crtime: attrs.crtime,
             atime: attrs.atime,
             mtime: attrs.mtime,

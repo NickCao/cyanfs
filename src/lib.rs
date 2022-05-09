@@ -80,7 +80,7 @@ impl<const BLOCK_SIZE: usize> SFS<BLOCK_SIZE> {
                 None => self.alloc_inode() as u64,
             },
             size: 0,
-            blocks: vec![],
+            extents: vec![],
             atime: now,
             mtime: now,
             ctime: now,
@@ -154,9 +154,9 @@ impl<const BLOCK_SIZE: usize> Filesystem for SFS<BLOCK_SIZE> {
             .scan(|i| {
                 let ino = i.ino as usize;
                 self.inode_allocator.remove(ino as usize..ino + 1);
-                for b in &i.blocks {
-                    self.block_allocator.remove(*b..*b + 1);
-                }
+                i.extents.clone().into_iter().for_each(|e| {
+                    self.block_allocator.remove(e);
+                })
             })
             .unwrap();
         Ok(())
@@ -204,10 +204,15 @@ impl<const BLOCK_SIZE: usize> Filesystem for SFS<BLOCK_SIZE> {
                 i.size = new_size as u64;
             }
             let block_cnt = (new_size + (BLOCK_SIZE - 1)) / BLOCK_SIZE;
-            while block_cnt > i.blocks.len() {
-                i.blocks.push(self.block_allocator.alloc().unwrap());
+            let origi_cnt = i.blocks();
+            if block_cnt > origi_cnt {
+                let cnt = block_cnt - origi_cnt;
+                let begin = self
+                    .block_allocator
+                    .alloc_contiguous(block_cnt - origi_cnt, 0)
+                    .unwrap();
+                i.extents.push(begin..begin + cnt);
             }
-
             i.write_at(self.dev.clone(), data, offset as u64).unwrap()
         }) {
             Ok(size) => reply.written(size as u32),
@@ -338,8 +343,8 @@ impl<const BLOCK_SIZE: usize> Filesystem for SFS<BLOCK_SIZE> {
                 match self.meta.lock().unwrap().modify(ent.ino, |i| {
                     i.nlink -= 1;
                     if i.nlink == 0 {
-                        i.blocks.iter().for_each(|&b| {
-                            self.block_allocator.dealloc(b);
+                        i.extents.clone().into_iter().for_each(|e| {
+                            self.block_allocator.insert(e);
                         });
                         self.inode_allocator.dealloc(i.ino as usize);
                     }
