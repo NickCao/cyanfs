@@ -180,14 +180,12 @@ impl<const BLOCK_SIZE: usize> InodeCache<BLOCK_SIZE> {
         }
     }
 
-    #[must_use]
     pub fn scan(&mut self, mut f: impl FnMut(&Attrs<BLOCK_SIZE>)) -> Result<(), c_int> {
         let it = self.db.iterator(rocksdb::IteratorMode::Start);
         for (_, data) in it {
             if let Ok(attrs) = bincode::deserialize::<Attrs<BLOCK_SIZE>>(&data) {
                 f(&attrs);
             } else {
-                log::info!("5");
                 return Err(libc::EIO);
             }
         }
@@ -206,7 +204,6 @@ impl<const BLOCK_SIZE: usize> InodeCache<BLOCK_SIZE> {
         );
     }
 
-    #[must_use]
     pub fn read<V>(
         &mut self,
         ino: u64,
@@ -229,19 +226,16 @@ impl<const BLOCK_SIZE: usize> InodeCache<BLOCK_SIZE> {
                     );
                     Ok(v)
                 } else {
-                    log::info!("1");
                     Err(libc::EIO)
                 }
             } else {
                 Err(libc::ENOENT)
             }
         } else {
-            log::info!("2");
             Err(libc::EIO)
         }
     }
 
-    #[must_use]
     pub fn modify<V>(
         &mut self,
         ino: u64,
@@ -265,14 +259,12 @@ impl<const BLOCK_SIZE: usize> InodeCache<BLOCK_SIZE> {
                     );
                     Ok(v)
                 } else {
-                    log::info!("3");
                     Err(libc::EIO)
                 }
             } else {
                 Err(libc::ENOENT)
             }
         } else {
-            log::info!("4");
             Err(libc::EIO)
         }
     }
