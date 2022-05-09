@@ -30,10 +30,14 @@ pub struct Inode<const BLOCK_SIZE: usize, T: NonVolatileMemory> {
 impl<const BLOCK_SIZE: usize, T: NonVolatileMemory> Drop for Inode<BLOCK_SIZE, T> {
     fn drop(&mut self) {
         if self.dirty {
-            self.db.lock().unwrap().put(
-                &LumpId::new(self.attrs.ino.into()),
-                &LumpData::new(bincode::serialize(&self.attrs).unwrap()).unwrap(),
-            ).unwrap();
+            self.db
+                .lock()
+                .unwrap()
+                .put(
+                    &LumpId::new(self.attrs.ino.into()),
+                    &LumpData::new(bincode::serialize(&self.attrs).unwrap()).unwrap(),
+                )
+                .unwrap();
         }
     }
 }
@@ -121,7 +125,7 @@ impl<const BLOCK_SIZE: usize> Attrs<BLOCK_SIZE> {
     }
 }
 
-#[derive(Serialize, Deserialize, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
 pub struct Attrs<const BLOCK_SIZE: usize> {
     pub ino: u64,
     pub size: u64,
@@ -301,6 +305,7 @@ impl<const BLOCK_SIZE: usize, T: NonVolatileMemory> InodeCache<BLOCK_SIZE, T> {
     }
 
     pub fn flush(&mut self) {
-        self.cache.clear()
+        self.cache.clear();
+        self.db.lock().unwrap().journal_sync().unwrap();
     }
 }

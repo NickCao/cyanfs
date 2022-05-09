@@ -48,7 +48,11 @@ impl<const BLOCK_SIZE: usize, T: NonVolatileMemory> SFS<BLOCK_SIZE, T> {
         ));
         Self {
             dev: dev.clone(),
-            meta: Arc::new(Mutex::new(InodeCache::new(Arc::new(Mutex::new(db)), dev, inode_cache))),
+            meta: Arc::new(Mutex::new(InodeCache::new(
+                Arc::new(Mutex::new(db)),
+                dev,
+                inode_cache,
+            ))),
             block_allocator: new_allocator(0..BitAlloc256M::CAP),
             inode_allocator: new_allocator(FUSE_ROOT_ID as usize..BitAlloc256M::CAP),
         }
@@ -150,6 +154,7 @@ impl<const BLOCK_SIZE: usize, T: NonVolatileMemory> Filesystem for SFS<BLOCK_SIZ
             .lock()
             .unwrap()
             .scan(|i| {
+                println!("{:?}", i);
                 let ino = i.ino as usize;
                 self.inode_allocator.remove(ino as usize..ino + 1);
                 i.extents.clone().into_iter().for_each(|e| {
@@ -159,7 +164,10 @@ impl<const BLOCK_SIZE: usize, T: NonVolatileMemory> Filesystem for SFS<BLOCK_SIZ
             .unwrap();
         Ok(())
     }
-    fn destroy(&mut self) {}
+    fn destroy(&mut self) {
+        self.meta.lock().unwrap().flush();
+        self.dev.lock().unwrap().flush();
+    }
     fn forget(&mut self, _req: &Request<'_>, _ino: u64, _nlookup: u64) {}
     fn read(
         &mut self,
