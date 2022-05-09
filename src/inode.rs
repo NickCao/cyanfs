@@ -5,7 +5,7 @@ use cannyls::nvm::NonVolatileMemory;
 use cannyls::storage::Storage;
 use lru::LruCache;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::ops::Range;
 use std::os::raw::c_int;
 use std::sync::Arc;
@@ -137,7 +137,7 @@ pub struct Attrs<const BLOCK_SIZE: usize> {
     pub gid: u32,
     pub rdev: u32,
     pub flags: u32,
-    pub entries: HashMap<String, DirEntry>,
+    pub entries: BTreeMap<String, DirEntry>,
     pub link: std::path::PathBuf,
 }
 

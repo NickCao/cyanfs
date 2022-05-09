@@ -11,9 +11,9 @@ fn main() {
         MountOption::AutoUnmount,
         MountOption::DefaultPermissions,
     ];
-    let (nvm, _) = FileNvm::create_if_absent("target/sfs-meta", 1024 * 1024 * 1024 * 5).unwrap();
+    let (nvm, _) = FileNvm::create_if_absent("/dev/nvme0n1p3", 1024 * 1024 * 1024 * 5).unwrap();
     let fs: SFS<4096, FileNvm> = SFS::new(
-        "/dev/nvme0n1p3",
+        "/dev/nvme0n1p4",
         2048,
         2048,
         StorageBuilder::new()

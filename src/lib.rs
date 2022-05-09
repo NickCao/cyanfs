@@ -8,7 +8,7 @@ use fuser::{
     Request, FUSE_ROOT_ID,
 };
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::ops::Range;
 use std::os::raw::c_int;
@@ -90,7 +90,7 @@ impl<const BLOCK_SIZE: usize, T: NonVolatileMemory> SFS<BLOCK_SIZE, T> {
             rdev: 0,
             flags: 0,
             link: std::path::PathBuf::new(),
-            entries: HashMap::new(),
+            entries: BTreeMap::new(),
         }
     }
     pub fn remove_dirent(&mut self, parent: u64, name: &OsStr) -> Result<DirEntry, c_int> {
