@@ -31,15 +31,16 @@ fn main() {
         MountOption::AutoUnmount,
         MountOption::DefaultPermissions,
     ];
-    let (nvm, _) = if args.new {
-        FileNvm::create_if_absent(args.meta, 1024 * 1024 * 1024 * 5).unwrap()
+    let mut store = if args.new {
+        let (nvm, _) = FileNvm::create_if_absent(args.meta, 1024 * 1024 * 1024 * 5).unwrap();
+        StorageBuilder::new()
+            .journal_region_ratio(0.6)
+            .create(nvm)
+            .unwrap()
     } else {
-        (FileNvm::open(args.meta).unwrap(), false)
+        let nvm = FileNvm::open(args.meta).unwrap();
+        StorageBuilder::new().open(nvm).unwrap()
     };
-    let mut store = StorageBuilder::new()
-        .journal_region_ratio(0.6)
-        .create(nvm)
-        .unwrap();
     store.run_side_job_once().unwrap();
     let fs: SFS<4096, FileNvm> = SFS::new(&args.data, 2048, 2048, store);
     mount2(fs, args.mountpoint, &options).unwrap();

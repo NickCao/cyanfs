@@ -154,7 +154,6 @@ impl<const BLOCK_SIZE: usize, T: NonVolatileMemory> Filesystem for SFS<BLOCK_SIZ
             .lock()
             .unwrap()
             .scan(|i| {
-                println!("{:?}", i);
                 let ino = i.ino as usize;
                 self.inode_allocator.remove(ino as usize..ino + 1);
                 i.extents.clone().into_iter().for_each(|e| {
